@@ -1,21 +1,34 @@
 // Demand-driven remark/rehype plugin sets for the markdown viewer.
 //
-// `rehype-katex` pulls in KaTeX (~252 kB) and `rehype-highlight` pulls in
-// highlight.js (~279 kB). Listing both statically meant every reader downloaded
-// both before the first document could paint, whether or not it contained a
-// single equation or code fence. They are imported here on demand instead:
-// each document declares what it needs, the modules resolve once and are then
-// cached for every document after it.
+// `rehype-highlight` pulls in highlight.js (~279 kB). Listing it statically
+// meant every reader downloaded it before the first document could paint,
+// whether or not the document contained a single code fence. It is imported
+// here on demand instead: each document declares what it needs, the module
+// resolves once and is then cached for every document after it.
 //
 // Content renders immediately with whatever is already loaded; a late-arriving
 // plugin re-renders the tree once. Unhighlighted code is still correctly laid
 // out monospace in the meantime, so the upgrade reads as syntax colour
 // arriving, not as a reflow.
+//
+// Math takes a different route. `rehype-katex` used to typeset it here, in the
+// tree — which threw the original LaTeX away, leaving nothing for Copy LaTeX,
+// Show Source, equation labelling or a fallback re-render to work from. The
+// math passes below convert remark-math's nodes into elements that *carry* the
+// source, and the viewer maps those to React components that typeset it
+// through the MathRenderer (see `src/lib/math/`). KaTeX still loads on demand,
+// now from inside that renderer.
 
 import { useEffect, useMemo, useState } from "react";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeSlug from "rehype-slug";
+import {
+  remarkEquationReferences,
+  remarkInlineMathRefs,
+  remarkMathNodes,
+} from "./math/remark-math-nodes";
+import { isKatexLoaded, loadKatex } from "./math/adapters/katex";
 import { loadKatexStyles, loadMonoFont } from "./fonts";
 
 type Plugin = unknown;
@@ -40,8 +53,6 @@ export function detectMarkdownNeeds(source: string): MarkdownNeeds {
 // render highlighted on their very first paint).
 let highlightPromise: Promise<Plugin> | null = null;
 let highlightPlugin: Plugin | null = null;
-let katexPromise: Promise<Plugin> | null = null;
-let katexPlugin: Plugin | null = null;
 
 function loadHighlight(): Promise<Plugin> {
   highlightPromise ??= import("rehype-highlight")
@@ -56,22 +67,21 @@ function loadHighlight(): Promise<Plugin> {
   return highlightPromise;
 }
 
-function loadKatex(): Promise<Plugin> {
-  katexPromise ??= import("rehype-katex")
-    .then((m) => {
-      katexPlugin = m.default;
-      return katexPlugin;
-    })
-    .catch((error) => {
-      katexPromise = null;
-      throw error;
-    });
-  return katexPromise;
-}
-
 // Always-on plugins. Frozen module-level arrays: react-markdown re-parses when
 // a plugin array changes identity, so these must never be rebuilt per render.
-const BASE_REMARK = [remarkGfm, remarkMath] as const;
+//
+// Order matters among the math passes. `remarkMath` produces the math nodes;
+// `remarkInlineMathRefs` then splits `\ref`/`\eqref` out of inline math into
+// their own nodes; `remarkMathNodes` finally maps whatever math nodes remain
+// onto our own element. Running the mapping first would leave the references
+// buried inside an already-converted node.
+const BASE_REMARK = [
+  remarkGfm,
+  remarkMath,
+  remarkInlineMathRefs,
+  remarkMathNodes,
+  remarkEquationReferences,
+] as const;
 const BASE_REHYPE = [rehypeSlug] as const;
 
 /**
@@ -96,9 +106,16 @@ export function useMarkdownPlugins(source: string, extraRemark: readonly Plugin[
           .then(bump)
           .catch(() => {});
     }
+    // Math: the stylesheet and the default engine, both requested as soon as
+    // math is seen in the source so they are in flight while the tree parses.
+    // A document with no math downloads neither.
+    //
+    // `bump` re-renders once KaTeX lands, which is what lets the equations that
+    // were waiting on it take the synchronous path on their very next render
+    // rather than each scheduling its own async round trip.
     if (needs.math) {
       loadKatexStyles();
-      if (!katexPlugin)
+      if (!isKatexLoaded())
         void loadKatex()
           .then(bump)
           .catch(() => {});
@@ -118,17 +135,16 @@ export function useMarkdownPlugins(source: string, extraRemark: readonly Plugin[
 
   const rehypePlugins = useMemo(() => {
     const list: Plugin[] = [...BASE_REHYPE];
-    if (needs.math && katexPlugin) list.push(katexPlugin);
     if (needs.code && highlightPlugin) {
       // Unlabelled fences stay plain; trying every language on each block is
       // expensive on long documents. Explicit language fences retain colours.
       list.push([highlightPlugin, { detect: false, ignoreMissing: true }]);
     }
     return list;
-    // `katexPlugin`/`highlightPlugin` are module state, not reactive values —
-    // the effect above forces the re-render that re-reads them.
+    // `highlightPlugin` is module state, not a reactive value — the effect
+    // above forces the re-render that re-reads it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needs.code, needs.math, highlightPlugin, katexPlugin]);
+  }, [needs.code, highlightPlugin]);
 
   // react-markdown's `PluggableList` is structurally what both arrays are, but
   // importing unified's types here just to satisfy the cast is not worth it.

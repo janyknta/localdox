@@ -114,6 +114,8 @@ import {
   type ReadingMode,
   type ReadingFont,
 } from "@/lib/persistence";
+import { clearMathCache } from "@/lib/math/renderer";
+import type { MathPreferences, MathRendererType } from "@/lib/math/types";
 import {
   findSaved,
   migrateBookmarks,
@@ -380,6 +382,11 @@ export function DocsApp() {
   const [googleFont, setGoogleFont] = useState<string | null>(() => loadPrefs().googleFont);
   const [diagramColors, setDiagramColors] = useState<boolean>(() => loadPrefs().diagramColors);
   const [aiEnabled, setAiEnabled] = useState<boolean>(() => loadPrefs().aiEnabled);
+  const [mathRenderer, setMathRenderer] = useState<MathRendererType>(
+    () => loadPrefs().mathRenderer,
+  );
+  const [mathNumbering, setMathNumbering] = useState<boolean>(() => loadPrefs().mathNumbering);
+  const [mathExplorer, setMathExplorer] = useState<boolean>(() => loadPrefs().mathExplorer);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
@@ -680,6 +687,46 @@ export function DocsApp() {
   useEffect(() => {
     savePrefs({ readingMode });
   }, [readingMode]);
+
+  useEffect(() => {
+    savePrefs({ mathRenderer, mathNumbering, mathExplorer });
+  }, [mathRenderer, mathNumbering, mathExplorer]);
+
+  /**
+   * Switching engines invalidates every rendered equation: the cache is keyed
+   * by renderer preference, so the old entries are simply unreachable rather
+   * than wrong — but dropping them keeps memory from holding two full sets.
+   */
+  useEffect(() => {
+    clearMathCache();
+  }, [mathRenderer]);
+
+  /**
+   * MathJax's accessibility explorer, turned on for the page when the reader
+   * asks for it. It pulls in a speech-rule engine, which is why it is neither
+   * the default nor loaded alongside MathJax itself.
+   */
+  useEffect(() => {
+    if (!mathExplorer) return;
+    // Imported here rather than at module scope: a static import would pull
+    // MathJax's adapter — and with it the loader for a 1 MB engine — into the
+    // initial bundle of every reader, math or no math.
+    void import("@/lib/math/adapters/mathjax")
+      .then((module) => module.enableExplorer())
+      .catch(() => {
+        // Nothing to recover: expressions stay readable, they just aren't
+        // keyboard-explorable. Surfacing a toast for it would be noise.
+      });
+  }, [mathExplorer]);
+
+  /**
+   * What the viewer passes to its math layer. Memoized because it crosses into
+   * a memoized component — a fresh object here would re-render every document.
+   */
+  const mathPreferences = useMemo<MathPreferences>(
+    () => ({ renderer: mathRenderer, numberEquations: mathNumbering }),
+    [mathRenderer, mathNumbering],
+  );
 
   useEffect(() => {
     savePrefs({ readingFont });
@@ -2571,6 +2618,12 @@ flowchart LR
         onSetTheme={setTheme}
         readingMode={readingMode}
         onSetReadingMode={setReadingMode}
+        mathRenderer={mathRenderer}
+        onSetMathRenderer={setMathRenderer}
+        mathNumbering={mathNumbering}
+        onSetMathNumbering={setMathNumbering}
+        mathExplorer={mathExplorer}
+        onSetMathExplorer={setMathExplorer}
         readingFont={readingFont}
         onSetReadingFont={setReadingFont}
         googleFont={googleFont}
@@ -3008,6 +3061,7 @@ flowchart LR
                                   onRemoveSaved={removeSaved}
                                   onOpenArtifact={openEmbeddedArtifact}
                                   readingMode={readingMode}
+                                  mathPreferences={mathPreferences}
                                   // Only the focused pane may honour an edit
                                   // request. `autoEditFileId` is a bare file id,
                                   // and the same document can sit in more than
@@ -3065,6 +3119,7 @@ flowchart LR
                   onShareFile={shareActiveFile}
                   onAskAi={aiEnabled ? askAiFromSelection : undefined}
                   readingMode={readingMode}
+                  mathPreferences={mathPreferences}
                   workspaceId={workspaceId}
                   workspaceRevision={workspaceRevision}
                   workspaceFiles={files}

@@ -10,6 +10,7 @@ import {
   ScrollText,
   Files,
   Sparkles,
+  Sigma,
   Pencil,
   X,
 } from "lucide-react";
@@ -30,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import type { Highlight } from "@/lib/dom-highlighter";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ThemePref, ReadingMode, ReadingFont } from "@/lib/persistence";
+import type { MathRendererType } from "@/lib/math/types";
 import { BIN_RETENTION_MS } from "@/lib/persistence";
 import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
 import { STORAGE_QUOTA_FRACTION, formatBytes } from "@/lib/storage-limits";
@@ -62,6 +64,12 @@ export interface SettingsPageProps {
   onSetDiagramColors: (on: boolean) => void;
   aiEnabled: boolean;
   onSetAiEnabled: (on: boolean) => void;
+  mathRenderer: MathRendererType;
+  onSetMathRenderer: (renderer: MathRendererType) => void;
+  mathNumbering: boolean;
+  onSetMathNumbering: (on: boolean) => void;
+  mathExplorer: boolean;
+  onSetMathExplorer: (on: boolean) => void;
   /** Bring a binned document back into the workspace. */
   onRestoreFromBin: (id: string) => void;
   /** Delete one binned document for good. */
@@ -122,6 +130,12 @@ export function SettingsPage({
   onSetDiagramColors,
   aiEnabled,
   onSetAiEnabled,
+  mathRenderer,
+  onSetMathRenderer,
+  mathNumbering,
+  onSetMathNumbering,
+  mathExplorer,
+  onSetMathExplorer,
   onRestoreFromBin,
   onDeleteForever,
   onEmptyBin,
@@ -236,6 +250,12 @@ export function SettingsPage({
                 onSetDiagramColors={onSetDiagramColors}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
+                mathRenderer={mathRenderer}
+                onSetMathRenderer={onSetMathRenderer}
+                mathNumbering={mathNumbering}
+                onSetMathNumbering={onSetMathNumbering}
+                mathExplorer={mathExplorer}
+                onSetMathExplorer={onSetMathExplorer}
               />
             )}
             {/* Guarded as well as hidden from the rail: the dialog can be
@@ -256,6 +276,12 @@ export function SettingsPage({
                 onSetDiagramColors={onSetDiagramColors}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
+                mathRenderer={mathRenderer}
+                onSetMathRenderer={onSetMathRenderer}
+                mathNumbering={mathNumbering}
+                onSetMathNumbering={onSetMathNumbering}
+                mathExplorer={mathExplorer}
+                onSetMathExplorer={onSetMathExplorer}
               />
             )}
             {activeTab === "workspace" && (
@@ -328,6 +354,35 @@ const READING_MODE_META: { id: ReadingMode; label: string; hint: string; icon: t
   { id: "single", label: "Single page", hint: "Everything on one scroll", icon: ScrollText },
 ];
 
+/**
+ * The engine choice, written for a reader rather than for someone who already
+ * knows what KaTeX is. "Automatic" leads because it is right for nearly
+ * everyone — the others exist for a document full of exotic LaTeX, or for a
+ * screen reader that navigates MathML better than KaTeX's HTML.
+ */
+const MATH_RENDERER_META: { id: MathRendererType; label: string; hint: string }[] = [
+  {
+    id: "auto",
+    label: "Automatic",
+    hint: "Fast typesetting, with a heavier engine loaded only for equations the fast one cannot draw. Recommended.",
+  },
+  {
+    id: "katex",
+    label: "Fast only",
+    hint: "KaTeX for everything it supports. Still falls back rather than showing a broken equation.",
+  },
+  {
+    id: "mathjax",
+    label: "Maximum coverage",
+    hint: "MathJax for every equation. Slower and ~1 MB to download, but handles the widest range of LaTeX.",
+  },
+  {
+    id: "temml",
+    label: "MathML (accessibility)",
+    hint: "Renders to MathML, which some screen readers navigate better. Appearance depends on your browser.",
+  },
+];
+
 function AppearanceSettings({
   theme,
   onSetTheme,
@@ -341,6 +396,12 @@ function AppearanceSettings({
   onSetDiagramColors,
   aiEnabled,
   onSetAiEnabled,
+  mathRenderer,
+  onSetMathRenderer,
+  mathNumbering,
+  onSetMathNumbering,
+  mathExplorer,
+  onSetMathExplorer,
 }: {
   theme: ThemePref;
   onSetTheme: (theme: ThemePref) => void;
@@ -354,6 +415,12 @@ function AppearanceSettings({
   onSetReadingFont: (font: ReadingFont) => void;
   googleFont: string | null;
   onSetGoogleFont: (family: string | null) => void;
+  mathRenderer: MathRendererType;
+  onSetMathRenderer: (renderer: MathRendererType) => void;
+  mathNumbering: boolean;
+  onSetMathNumbering: (on: boolean) => void;
+  mathExplorer: boolean;
+  onSetMathExplorer: (on: boolean) => void;
 }) {
   return (
     <div className="space-y-10">
@@ -425,6 +492,57 @@ function AppearanceSettings({
               </button>
             );
           })}
+        </Group>
+      </Section>
+
+      {/* Math sits with the other reading choices: which engine typesets an
+          equation is a reading decision, and for most readers the default is
+          the only correct answer — so the engine list leads with it and
+          explains what the others are for. */}
+      <Section title="Math">
+        <Group>
+          {MATH_RENDERER_META.map((option) => {
+            const active = mathRenderer === option.id;
+            return (
+              <button
+                key={option.id}
+                onClick={() => onSetMathRenderer(option.id)}
+                aria-pressed={active}
+                className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-accent/40"
+              >
+                <Sigma className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-foreground">{option.label}</span>
+                  <span className="block text-xs text-muted-foreground">{option.hint}</span>
+                </span>
+                {active && <Check className="h-4 w-4 shrink-0 text-primary" />}
+              </button>
+            );
+          })}
+        </Group>
+        <Group className="mt-3">
+          <Row
+            label="Number equations"
+            hint="Numbers display equations and resolves \\ref, \\eqref and {{eq:label}} against them."
+            control={
+              <Switch
+                checked={mathNumbering}
+                onCheckedChange={onSetMathNumbering}
+                aria-label="Number equations"
+              />
+            }
+          />
+          <Row
+            label="Explore equations by keyboard"
+            hint="MathJax's accessibility explorer: step through an expression's parts, each one spoken. Downloads a speech engine on first use."
+            control={
+              <Switch
+                checked={mathExplorer}
+                onCheckedChange={onSetMathExplorer}
+                aria-label="Explore equations by keyboard"
+              />
+            }
+          />
         </Group>
       </Section>
 

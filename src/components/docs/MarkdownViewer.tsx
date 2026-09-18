@@ -104,6 +104,11 @@ import {
 import { ViewerHeader, ViewerPager } from "./ViewerHeader";
 import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
 import { DISCARD_PROMPT } from "@/lib/document-utils";
+import { MathProvider } from "./math/MathContext";
+import { MATH_COMPONENTS } from "./math/components";
+import { MATH_ELEMENT } from "@/lib/math/remark-math-nodes";
+import { buildEquationRegistry } from "@/lib/math/equation-registry";
+import { DEFAULT_MATH_PREFERENCES, type MathPreferences } from "@/lib/math/types";
 
 interface Props {
   file: MdFile;
@@ -166,6 +171,11 @@ interface Props {
   onToggleReadingMode?: () => void;
   /** Open the Ask AI panel prefilled from the current selection. */
   onAskAi?: (prefill: { selection: string; actionId?: string }) => void;
+  /**
+   * How math is typeset, from the reader's preferences. Omitted means the
+   * defaults — KaTeX with a MathJax fallback, equations numbered.
+   */
+  mathPreferences?: MathPreferences;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
@@ -258,6 +268,7 @@ function MarkdownViewerImpl({
   readingMode = "paginated",
   onToggleReadingMode,
   onAskAi,
+  mathPreferences = DEFAULT_MATH_PREFERENCES,
 }: Props) {
   const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -448,6 +459,62 @@ function MarkdownViewerImpl({
   // The markdown actually handed to the renderer. Resolved once here so the
   // plugin hook and the renderer never disagree about which text is on screen.
   const markdownSource = singleMode ? fullRender : renderContent;
+
+  /**
+   * Jump to a labelled equation.
+   *
+   * A reference can point at an equation in a section that is not mounted —
+   * paginated mode renders one chunk at a time — so this resolves the label to
+   * the section that holds it, navigates there, and scrolls once the equation
+   * exists. The registry is built from the whole document here, not from the
+   * section on screen, which is also what keeps equation numbers stable as the
+   * reader pages through.
+   */
+  const equationOwnerChunk = useMemo(() => {
+    const registry = buildEquationRegistry(file.content, {
+      numbering: mathPreferences.numberEquations,
+    });
+    const owners = new Map<string, string>();
+    for (const entry of registry.entries) {
+      if (!entry.label) continue;
+      const at = file.content.indexOf(entry.latex);
+      const chunk =
+        at < 0
+          ? allChunks[0]
+          : allChunks.find((candidate) => {
+              const start = file.content.indexOf(candidate.content);
+              return start >= 0 && at >= start && at < start + candidate.content.length;
+            }) ?? allChunks[0];
+      if (chunk) owners.set(entry.label, chunk.id);
+    }
+    return owners;
+  }, [file.content, allChunks, mathPreferences.numberEquations]);
+
+  const navigateToEquation = useCallback(
+    (label: string) => {
+      const domId = `eq-${label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")}`;
+      const scroll = () =>
+        requestAnimationFrame(() => {
+          document.getElementById(domId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      if (singleMode) {
+        scroll();
+        return;
+      }
+      const owner = equationOwnerChunk.get(label);
+      if (owner && owner !== activeChunk.id) {
+        onNav(file.id, owner);
+        // The chunk mounts on the next commit; give it one before scrolling.
+        setTimeout(scroll, 80);
+        return;
+      }
+      scroll();
+    },
+    [singleMode, equationOwnerChunk, activeChunk.id, onNav, file.id],
+  );
 
   // Syntax highlighting and math typesetting are fetched only for documents
   // that contain code or math — see `useMarkdownPlugins`. Both plugin arrays
@@ -1083,6 +1150,18 @@ function MarkdownViewerImpl({
 
   const components = useMemo(
     () => ({
+      // Math elements, produced by the remark passes in `markdown-plugins`.
+      // Spread from a module-level constant so the components themselves stay
+      // referentially stable — an equation must not re-render because a heading
+      // was folded somewhere else on the page.
+      ...MATH_COMPONENTS,
+      // A display equation is a block, so it folds with the section above it
+      // like any other. Inline math (`docs-eq-ref` included) is part of a
+      // paragraph and folds with that paragraph, so it is left alone.
+      [MATH_ELEMENT]: (p: any) =>
+        p["data-display"] === "true" && underCollapsed()
+          ? null
+          : MATH_COMPONENTS[MATH_ELEMENT](p),
       h1: heading(1, "h1"),
       h2: heading(2, "h2"),
       h3: heading(3, "h3"),
@@ -1600,13 +1679,23 @@ function MarkdownViewerImpl({
               >
                 <SavedContext.Provider value={savedCtx}>
                   <CollapseContext.Provider value={collapseCtx}>
-                    <MarkdownContent
-                      remarkPlugins={remarkPlugins}
-                      rehypePlugins={rehypePlugins}
-                      components={components}
+                    {/* The equation registry is built from the *whole*
+                        document, not from the section on screen, so equation
+                        numbers and `\ref` targets stay put as the reader pages
+                        through a paginated document. */}
+                    <MathProvider
+                      source={file.content}
+                      preferences={mathPreferences}
+                      navigateToEquation={navigateToEquation}
                     >
-                      {markdownSource}
-                    </MarkdownContent>
+                      <MarkdownContent
+                        remarkPlugins={remarkPlugins}
+                        rehypePlugins={rehypePlugins}
+                        components={components}
+                      >
+                        {markdownSource}
+                      </MarkdownContent>
+                    </MathProvider>
                   </CollapseContext.Provider>
                 </SavedContext.Provider>
               </div>

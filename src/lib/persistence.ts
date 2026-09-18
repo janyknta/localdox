@@ -9,6 +9,8 @@
 // All IndexedDB access is funnelled through this module so UI components never
 // touch the database directly.
 
+import type { MathRendererType } from "./math/types";
+
 export interface PersistedFile {
   id: string;
   name: string;
@@ -542,6 +544,23 @@ export interface Prefs {
    * makes the "google" choice inert until they do.
    */
   googleFont: string | null;
+  /**
+   * Which engine typesets math.
+   *
+   * "auto" is KaTeX with a MathJax fallback for what KaTeX cannot draw, and is
+   * right for nearly everyone. "mathjax" forces the high-coverage engine for a
+   * document full of exotic LaTeX; "temml" renders to MathML, which some screen
+   * readers navigate better than KaTeX's HTML. See `src/lib/math/renderer.ts`.
+   */
+  mathRenderer: MathRendererType;
+  /** Number display equations and resolve `\ref`/`\eqref` against them. */
+  mathNumbering: boolean;
+  /**
+   * MathJax's accessibility explorer: keyboard navigation of an expression's
+   * sub-tree, with each part spoken. Loads a speech-rule engine on first use,
+   * so it is opt-in.
+   */
+  mathExplorer: boolean;
 }
 
 const PREFS_KEY = "localdox:prefs";
@@ -555,6 +574,9 @@ const DEFAULT_PREFS: Prefs = {
   readingMode: "paginated",
   readingFont: "hyperlegible",
   googleFont: null,
+  mathRenderer: "auto",
+  mathNumbering: true,
+  mathExplorer: false,
 };
 
 export function loadPrefs(): Prefs {

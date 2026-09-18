@@ -35,7 +35,22 @@
       "Bash(awk 'NR>=280 && NR<=380 && /^\\(export \\)?function |^}/{print NR\": \"$0}' src/components/docs/SettingsPage.tsx)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5199/)",
       "Bash(echo \"tsc_exit=$?\")",
-      "Bash(curl -s -o /dev/null -w \"port5199=%{http_code}\" --max-time 2 http://localhost:5199/)"
+      "Bash(curl -s -o /dev/null -w \"port5199=%{http_code}\" --max-time 2 http://localhost:5199/)",
+      "Bash(npm test *)",
+      "Bash(echo \"=== TYPECHECK EXIT: $? ===\")",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./package.json'\\).scripts,null,1\\)\\)\")",
+      "Bash(node -e \"const p=require\\('./node_modules/mathjax/package.json'\\); console.log\\(JSON.stringify\\(p.exports,null,1\\)\\)\")",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./node_modules/temml/package.json'\\).exports\\)\\)\")",
+      "Bash(grep -o 'fontURL[^,}]\\\\{0,80\\\\}' node_modules/mathjax/tex-mml-chtml.js)",
+      "Bash(grep -o 'mathjax-newcm[^\"]\\\\{0,40\\\\}' node_modules/mathjax/tex-mml-chtml.js)",
+      "Bash(grep -o 'font[A-Za-z]*:\"[^\"]\\\\{0,60\\\\}' node_modules/mathjax/tex-mml-chtml.js)",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./node_modules/@mathjax/mathjax-newcm-font/package.json'\\).exports,null,1\\)\\)\")",
+      "Bash(grep -o 'paths:{[^}]\\\\{0,160\\\\}' node_modules/mathjax/tex-mml-chtml.js)",
+      "Bash(grep -n \"diagramColors,$\" src/components/docs/SettingsPage.tsx)",
+      "Bash(node --experimental-strip-types --test tests/math.test.ts)",
+      "Bash(grep -o '.\\\\{0,180\\\\}katex-B7rAX3Vi.\\\\{0,60\\\\}' .output/public/assets/chunk-WYO6CB5R-C-366P-a.js)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code} %{size_download}\\\\n\" http://localhost:5199/__test/corpus.md)",
+      "Bash(grep -n \"^/\\\\*\\\\*$\" -A9 src/lib/math/sanitize.ts)"
     ],
     "additionalDirectories": [
       "/System/Library/Fonts"
