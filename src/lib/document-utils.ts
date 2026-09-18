@@ -179,3 +179,12 @@ export function fileLabel(kind: DocumentKind) {
     } as const
   )[kind];
 }
+
+/**
+ * Asked before any exit that throws a draft away.
+ *
+ * Editors write only when the reader presses Done, so every other way out of
+ * one — Cancel, Escape, switching documents — discards. Shared so the three
+ * editors ask the same question in the same words.
+ */
+export const DISCARD_PROMPT = "This document has unsaved changes. Leave and discard them?";

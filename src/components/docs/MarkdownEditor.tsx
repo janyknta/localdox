@@ -23,7 +23,12 @@ import { MarkdownToolbar } from "./MarkdownToolbar";
  * document was visibly behind the keyboard.
  *
  * The draft lives here now. A keystroke re-renders this component and nothing
- * else; the parent only hears about it on the debounced autosave.
+ * else; the parent only hears about it when the reader commits with Done.
+ *
+ * Nothing is written automatically. A draft is persisted when — and only when —
+ * the reader presses Done, and discarded when they press Cancel. There is no
+ * debounce and no flush on the way out: an edit the reader did not commit is an
+ * edit they did not make.
  */
 
 /** Imperative surface the viewer's "Inspect in source" jump drives. */
@@ -38,18 +43,17 @@ interface Props {
   /** Identity of the document being edited; remounts the draft when it changes. */
   fileId: string;
   /**
-   * Debounced autosave, and the target of the Cmd/Ctrl+S shortcut.
+   * Commit the draft and leave the editor. The only path that writes.
    *
-   * Takes the id of the document the text came from, not just the text. The
-   * editor can be asked to save after the parent has already switched files —
-   * the unmount flush below runs during that switch — and a save that only
-   * carried content would land on whichever document happened to be active by
-   * the time it arrived, overwriting it with the previous file's draft.
+   * Takes the id of the document the text came from, not just the text. A
+   * commit can land after the parent has already switched files, and a save
+   * that only carried content would be applied to whichever document happened
+   * to be active by the time it arrived, overwriting it with the previous
+   * file's draft. `content` is undefined when the draft never diverged from
+   * what the editor opened with — there is nothing to write.
    */
-  onSave: (fileId: string, content: string) => void;
-  /** Leave the editor, keeping the current draft. Passes back the cursor's source index. */
-  onDone: (cursorIndex?: number) => void;
-  /** Leave the editor, restoring `initialContent`. Passes back the cursor's source index. */
+  onDone: (fileId: string, content: string | undefined, cursorIndex?: number) => void;
+  /** Leave the editor, discarding the draft. Passes back the cursor's source index. */
   onCancel: (cursorIndex?: number) => void;
   /** Shown when "Inspect in source" couldn't pin the text to a source span. */
   inspectMissed?: boolean;
@@ -64,11 +68,8 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-/** How long typing has to pause before the draft is handed to the parent. */
-const AUTOSAVE_MS = 500;
-
 function MarkdownEditorImpl(
-  { initialContent, fileId, onSave, onDone, onCancel, inspectMissed, onDirtyChange }: Props,
+  { initialContent, fileId, onDone, onCancel, inspectMissed, onDirtyChange }: Props,
   handleRef: React.Ref<MarkdownEditorHandle>,
 ) {
   // The draft and the document it belongs to are one piece of state, set
@@ -93,19 +94,13 @@ function MarkdownEditorImpl(
     [],
   );
 
-  // Read by the shortcut and the unmount flush, so neither has to be rebuilt
-  // (and re-bound) on every keystroke.
+  // Read by the commit path, so it doesn't have to be rebuilt on every
+  // keystroke to see the latest text.
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
-  // The window-level Cmd/Ctrl+S handler is bound once, so it reads the live id
-  // through a ref rather than closing over the prop from its first render.
-  const fileIdRef = useRef(fileId);
-  fileIdRef.current = fileId;
 
   // Switching documents re-seeds the draft. `fileId` rather than
-  // `initialContent`, so the parent echoing an autosave back doesn't clobber
+  // `initialContent`, so a content echo from the parent doesn't clobber
   // whatever has been typed since.
   useEffect(() => {
     setDraft({ fileId, text: initialContent });
@@ -127,10 +122,6 @@ function MarkdownEditorImpl(
     [],
   );
 
-  // Set when the reader cancels, to stop the unmount flush below from writing
-  // the abandoned draft back over the content the parent just restored.
-  const cancelledRef = useRef(false);
-
   // Tell the parent whether there is anything to lose. Held in a ref so an
   // inline callback from the parent doesn't re-run this on every keystroke, and
   // reported only on a transition rather than on every edit.
@@ -144,54 +135,6 @@ function MarkdownEditorImpl(
   // way out (a flush, a cancel, a save) has already been decided by then.
   useEffect(() => {
     return () => onDirtyChangeRef.current?.(false);
-  }, []);
-
-  // Autosave. Each of these re-renders the parent's file list, so the pause is
-  // deliberately longer than a fast typist's gap between keystrokes.
-  useEffect(() => {
-    // A draft belonging to the document we just left is not this document's
-    // text. The re-seed effect above is about to replace it; saving in the
-    // meantime is what wrote one file's content over another's.
-    if (draft.fileId !== fileId) return;
-    if (draft.text === initialContent) return;
-    const target = draft.fileId;
-    const text = draft.text;
-    const t = setTimeout(() => onSaveRef.current(target, text), AUTOSAVE_MS);
-    return () => clearTimeout(t);
-  }, [draft, initialContent, fileId]);
-
-  // Don't lose the tail of a burst of typing when the editor closes between the
-  // last keystroke and the autosave firing.
-  //
-  // This is the flush that used to lose documents. It runs *during* a file
-  // switch, after the parent has re-rendered with the new document, so the id
-  // is captured on the way in and the content is written back to the file it
-  // was actually typed into.
-  useEffect(() => {
-    const target = fileId;
-    const openedWith = initialContent;
-    return () => {
-      if (cancelledRef.current) return;
-      const pending = draftRef.current;
-      // Same guard as the autosave: flush only a draft that still belongs to
-      // the document this effect was set up for.
-      if (pending.fileId !== target) return;
-      if (pending.text !== openedWith) onSaveRef.current(target, pending.text);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId]);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        const pending = draftRef.current;
-        if (pending.fileId !== fileIdRef.current) return;
-        onSaveRef.current(pending.fileId, pending.text);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   /**
@@ -252,12 +195,23 @@ function MarkdownEditorImpl(
   );
 
   const cancel = useCallback(() => {
-    // Order matters: the flag has to be set before the parent unmounts this
-    // component, or the cleanup above would re-save the discarded draft.
-    cancelledRef.current = true;
     setText(initialContent);
     onCancel(textareaRef.current?.selectionStart);
   }, [initialContent, onCancel, setText]);
+
+  /**
+   * Commit and leave. The single write path.
+   *
+   * A draft that still carries the id of a document we have since left is not
+   * this document's text, and is dropped rather than written to the wrong file.
+   * An unchanged draft commits nothing, so Done on an untouched editor is not a
+   * write.
+   */
+  const done = useCallback(() => {
+    const pending = draftRef.current;
+    const changed = pending.fileId === fileId && pending.text !== initialContent;
+    onDone(fileId, changed ? pending.text : undefined, textareaRef.current?.selectionStart);
+  }, [fileId, initialContent, onDone]);
 
   return (
     <div>
@@ -266,7 +220,7 @@ function MarkdownEditorImpl(
           full-document re-render on every keystroke. */}
       <div className="sticky top-16 z-(--z-sticky) -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2">
         <span className="truncate text-xs font-medium text-muted-foreground">
-          Editing — changes save automatically
+          Editing — Done saves, Cancel discards
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -276,10 +230,10 @@ function MarkdownEditorImpl(
             Cancel
           </button>
           <button
-            onClick={() => onDone(textareaRef.current?.selectionStart)}
+            onClick={done}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
           >
-            <Eye className="h-3.5 w-3.5" /> Done · Preview
+            <Eye className="h-3.5 w-3.5" /> Done · Save
           </button>
         </div>
       </div>

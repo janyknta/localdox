@@ -52,7 +52,7 @@ import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-ite
 import { BIN_RETENTION_MS } from "@/lib/persistence";
 import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
-import { fileLabel, getDocumentKind } from "@/lib/document-utils";
+import { fileLabel, getDocumentKind, isTextKind } from "@/lib/document-utils";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useNavHistory } from "@/hooks/use-nav-history";
 
@@ -122,7 +122,10 @@ function savedByFile(items: SavedEntry[]): Array<[string, SavedEntry[]]> {
 export type SidebarView = {
   sort: "manual" | "name" | "date";
   dir: "asc" | "desc";
-  mode: "all" | "grouped" | "saved" | "bin";
+  // The Bin used to be a fourth mode here. It lives in Settings ▸ Storage now,
+  // which already had the complete panel — restore, delete-for-good, empty, and
+  // the retention countdown — so the sidebar was the second, thinner copy.
+  mode: "all" | "grouped" | "saved";
 };
 export const DEFAULT_VIEW: SidebarView = {
   sort: "manual",
@@ -131,12 +134,11 @@ export const DEFAULT_VIEW: SidebarView = {
 };
 
 /** The list's three views, in the order the picker offers them. */
-const VIEW_MODES: readonly SidebarView["mode"][] = ["all", "grouped", "saved", "bin"];
+const VIEW_MODES: readonly SidebarView["mode"][] = ["all", "grouped", "saved"];
 const VIEW_LABEL: Record<SidebarView["mode"], string> = {
   all: "All files",
   grouped: "Grouped",
   saved: "Saved",
-  bin: "Bin",
 };
 
 /** A sidebar folder, as far as the sidebar is concerned. */
@@ -187,10 +189,8 @@ interface Props {
   onCreateFolder?: (name: string, parentId?: string | null) => void;
   /** Re-parent a folder. `null` puts it back at the top level. */
   onMoveFolderToFolder?: (folderId: string, parentId: string | null) => void;
-  /** Bring a binned document back into the workspace. */
-  onRestoreFromBin?: (id: string) => void;
-  /** Delete one binned document for good, from the Bin view. */
-  onDeleteForever?: (id: string) => void;
+  // Restoring and deleting-for-good moved to Settings ▸ Storage along with the
+  // Bin view itself, so the sidebar no longer takes those callbacks.
   onRenameFolder?: (id: string, name: string) => void;
   /** Deleting a folder keeps its documents — they return to the top level. */
   onDeleteFolder?: (id: string) => void;
@@ -267,8 +267,6 @@ function SidebarImpl({
   onDeleteFolder,
   onMoveFileToFolder,
   onMoveFolderToFolder,
-  onRestoreFromBin,
-  onDeleteForever,
   saved,
   currentWorkspaceName,
   canDeleteWorkspace,
@@ -394,10 +392,9 @@ function SidebarImpl({
 
   const total = files.length;
 
-  // Binned documents are out of the list entirely — they live in the Bin view
-  // until they are restored or purged.
+  // Binned documents are out of the list entirely — they live in Settings ▸
+  // Storage until they are restored or purged.
   const activeFiles = files.filter((f) => !f.isArchived && !f.deletedAt);
-  const binnedFiles = files.filter((f) => !!f.deletedAt);
 
   // Multi-select shortcuts. Read through a ref so the listener isn't torn down
   // and rebuilt on every render just because `activeFiles` is a fresh array.
@@ -786,12 +783,13 @@ function SidebarImpl({
               // The file types with an editor behind them. A PDF or a
               // spreadsheet has no edit mode to enter, so the item is absent
               // rather than present and inert.
-              onEdit={
-                onEditFile &&
-                (kind === "markdown" || kind === "mermaid" || kind === "text" || kind === "json")
-                  ? () => onEditFile(file.id)
-                  : undefined
-              }
+              //
+              // `isTextKind` is the same predicate the import path uses to
+              // decide which documents are stored as editable text, so it is
+              // what decides who may edit one. Spelling the list out a second
+              // time here is what left HTML, CSV, and the Google kinds stored
+              // as text but with no way to open their editor.
+              onEdit={onEditFile && isTextKind(kind) ? () => onEditFile(file.id) : undefined}
               onRename={() => {
                 const newName = window.prompt("Rename file to:", file.name);
                 if (newName && newName !== file.name) {
@@ -973,70 +971,7 @@ function SidebarImpl({
             </button>
           </div>
         )}
-        {view.mode === "bin" ? (
-          binnedFiles.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-muted-foreground">
-              The Bin is empty. Removed files wait here for 30 days.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {binnedFiles.map((file) => {
-                const left = Math.max(
-                  0,
-                  Math.ceil(
-                    ((file.deletedAt as number) + BIN_RETENTION_MS - Date.now()) /
-                      (24 * 60 * 60 * 1000),
-                  ),
-                );
-                const KindIcon = kindIcon(kindOf(file));
-                return (
-                  <li
-                    key={file.id}
-                    className="group flex items-start gap-1 rounded-lg px-1 hover:bg-accent/60"
-                  >
-                    <div className="flex min-w-0 flex-1 items-start gap-2 py-2 pl-2 pr-1.5">
-                      <KindIcon
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                        aria-hidden
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-foreground/80">
-                          {file.name}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-muted-foreground">
-                          {left === 0
-                            ? "Deletes on next open"
-                            : `${left} day${left === 1 ? "" : "s"} left`}
-                        </span>
-                      </span>
-                    </div>
-                    {onRestoreFromBin && (
-                      <button
-                        onClick={() => onRestoreFromBin(file.id)}
-                        className="mt-1.5 shrink-0 rounded px-2 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
-                      >
-                        Restore
-                      </button>
-                    )}
-                    {onDeleteForever && (
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Permanently delete "${file.name}"?`)) {
-                            onDeleteForever(file.id);
-                          }
-                        }}
-                        aria-label="Delete forever"
-                        className="mt-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )
-        ) : view.mode === "saved" ? (
+        {view.mode === "saved" ? (
           saved.length === 0 ? (
             <p className="px-2 py-4 text-sm text-muted-foreground">
               No saved items yet. Star a document, a section, a table or a code block.

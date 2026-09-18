@@ -103,6 +103,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ViewerHeader, ViewerPager } from "./ViewerHeader";
 import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
+import { DISCARD_PROMPT } from "@/lib/document-utils";
 
 interface Props {
   file: MdFile;
@@ -265,16 +266,16 @@ function MarkdownViewerImpl({
   // editor opened with is kept here, so Cancel can put it back.
   const originalContentRef = useRef(file.content);
 
+  // Done: commit the draft, then leave.
+  //
   // The editor hands back the id of the document the text was typed into. It is
-  // not necessarily `file.id`: a save can arrive while the reader is switching
-  // files, and routing it by the now-current file would overwrite the document
-  // they just opened with the draft from the one they left.
-  const saveDraft = useCallback(
-    (fileId: string, content: string) => onContentChange(fileId, content),
-    [onContentChange],
-  );
+  // not necessarily `file.id`: a commit can arrive while the reader is
+  // switching files, and routing it by the now-current file would overwrite the
+  // document they just opened with the draft from the one they left. `content`
+  // is undefined when nothing was changed, and then nothing is written.
   const leaveEditMode = useCallback(
-    (cursorIndex?: number) => {
+    (fileId: string, content: string | undefined, cursorIndex?: number) => {
+      if (content !== undefined) onContentChange(fileId, content);
       setEditMode(false);
       if (cursorIndex !== undefined) {
         const chunks = fileSubtopics(file);
@@ -302,39 +303,41 @@ function MarkdownViewerImpl({
         }
       }
     },
-    [file, singleMode, onNav],
+    [file, singleMode, onNav, onContentChange],
   );
+  // Cancel: the draft is discarded inside the editor and was never written, so
+  // there is nothing here to roll back.
+  //
+  // Cancel only scrolls; it must never navigate. Resolving the caret to a
+  // section and calling `onNav` moved the reader into that one section's view,
+  // which reads as the rest of the document having been thrown away along with
+  // the draft. Done still navigates — after a write, landing on the section you
+  // were editing is the useful place to be — but an abandoned edit should put
+  // the document back exactly as it was found.
   const cancelEdit = useCallback(
     (cursorIndex?: number) => {
-      onContentChange(file.id, originalContentRef.current);
       setEditMode(false);
-      if (cursorIndex !== undefined) {
-        const chunks = fileSubtopics(file);
-        if (chunks.length > 0) {
-          let currentLength = 0;
-          let targetChunk = chunks[0];
-          for (const chunk of chunks) {
-            if (
-              cursorIndex >= currentLength &&
-              cursorIndex <= currentLength + chunk.content.length
-            ) {
-              targetChunk = chunk;
-              break;
-            }
-            currentLength += chunk.content.length + 1;
-          }
-          if (singleMode) {
-            setTimeout(() => {
-              const el = document.getElementById(targetChunk.id);
-              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-            }, 100);
-          } else {
-            onNav(file.id, targetChunk.id);
-          }
+      if (cursorIndex === undefined) return;
+      const chunks = fileSubtopics(file);
+      if (chunks.length === 0) return;
+      let currentLength = 0;
+      let targetChunk = chunks[0];
+      for (const chunk of chunks) {
+        if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
+          targetChunk = chunk;
+          break;
         }
+        currentLength += chunk.content.length + 1;
       }
+      // Chunked mode is already showing whichever section the reader opened the
+      // editor from, so there is nothing to move there either.
+      if (!singleMode) return;
+      setTimeout(() => {
+        const el = document.getElementById(targetChunk.id);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
     },
-    [onContentChange, file.id, file, singleMode, onNav],
+    [file, singleMode],
   );
   const enterEditMode = useCallback(() => {
     originalContentRef.current = file.content;
@@ -379,9 +382,17 @@ function MarkdownViewerImpl({
     URL.revokeObjectURL(url);
   }, [file.name]);
 
-  // Back leaves the editor. Autosave has already written the draft, so this
-  // drops nothing the reader typed.
-  useNavEscape(editMode, () => setEditMode(false), ESCAPE_DEPTH.mode);
+  // Back leaves the editor, which discards the draft — nothing is written on
+  // the way out, so a draft with real changes in it asks first. An untouched
+  // editor closes silently, which is what keeps the prompt meaningful.
+  useNavEscape(
+    editMode,
+    () => {
+      if (editorDirtyRef.current && !window.confirm(DISCARD_PROMPT)) return;
+      setEditMode(false);
+    },
+    ESCAPE_DEPTH.mode,
+  );
 
   const allChunks = useMemo(() => fileSubtopics(file), [file.subtopics, file.content, file.name]);
 
@@ -601,9 +612,8 @@ function MarkdownViewerImpl({
   /**
    * Stop a document switch from silently throwing away an open draft.
    *
-   * The editor autosaves, so most navigation is safe — but a draft typed inside
-   * the debounce window, or one the reader is midway through and does not want,
-   * has no other moment to be asked about. Only a genuinely changed draft
+   * Nothing is written until the reader presses Done, so every way out of the
+   * editor that isn't Done loses the draft. Only a genuinely changed draft
    * prompts: leaving an untouched editor stays silent, which is what makes the
    * prompt mean something when it does appear.
    */
@@ -623,7 +633,7 @@ function MarkdownViewerImpl({
   }, []);
   const confirmLeaveEditor = useCallback(() => {
     if (!editorDirtyRef.current) return true;
-    return window.confirm("This document has unsaved changes. Leave and discard them?");
+    return window.confirm(DISCARD_PROMPT);
   }, []);
   const [pendingSelect, setPendingSelect] = useState<{ start: number; end: number } | null>(null);
   const [inspectMissed, setInspectMissed] = useState(false);
@@ -702,8 +712,8 @@ function MarkdownViewerImpl({
     const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
       Map<string, any> | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
-    // Mid-edit the rendered document is a moving target (the draft autosaves
-    // every 400ms). Re-anchoring waits for the reader to leave the editor.
+    // Mid-edit the rendered document is stale — the draft isn't written until
+    // Done. Re-anchoring waits for the reader to leave the editor.
     if (editMode) return;
 
     // Deferred to the next frame so adding a highlight doesn't repaint every
@@ -903,7 +913,7 @@ function MarkdownViewerImpl({
     return () => anim.cancel();
   }, [activeChunk.id, file.id]);
 
-  // Autosaving the draft is the editor's own concern now — see MarkdownEditor.
+  // The draft lives in the editor and is written only on Done — see MarkdownEditor.
 
   /**
    * Back to the top of *this* document.
@@ -947,6 +957,33 @@ function MarkdownViewerImpl({
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
+
+  // Opening a search result put the reader at the top of the section holding
+  // the match and stopped there — on a long section the match itself could be
+  // pages below the fold, which read as the result not going anywhere.
+  //
+  // The two effects above own the section-level scroll, so this one runs after
+  // them and moves the rest of the way to the first highlighted occurrence.
+  // `<mark>` elements are painted by the renderer in the same commit as the
+  // content, so this waits a frame rather than reading the previous document's
+  // DOM. Centred rather than aligned to the top: a match is read in the context
+  // of the lines around it.
+  useEffect(() => {
+    if (editMode) return;
+    const q = highlightQuery?.trim();
+    if (!q) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      const container = contentRef.current;
+      const mark = container?.querySelector("mark");
+      if (mark) mark.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [highlightQuery, activeChunk.id, activeSubtopicId, file.id, singleMode, editMode]);
 
   // Reading progress now lives in <ReadingProgress>, which writes the
   // percentage straight to its own DOM node. It used to be state up here, and
@@ -1550,7 +1587,6 @@ function MarkdownViewerImpl({
                 ref={editorRef}
                 fileId={file.id}
                 initialContent={file.content}
-                onSave={saveDraft}
                 onDone={leaveEditMode}
                 onCancel={cancelEdit}
                 onDirtyChange={setEditorDirty}

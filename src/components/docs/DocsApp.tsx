@@ -77,7 +77,12 @@ import type { MdFile, MdChunk } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { isBinExpired } from "@/lib/persistence";
 import { fileSubtopics, readingMinutes } from "@/lib/markdown-utils";
-import { getDocumentKind, importDocumentFile, SUPPORTED_ACCEPT } from "@/lib/document-utils";
+import {
+  DISCARD_PROMPT,
+  getDocumentKind,
+  importDocumentFile,
+  SUPPORTED_ACCEPT,
+} from "@/lib/document-utils";
 import { clearArtifactResolutionCache } from "@/lib/workspace-artifacts";
 import { loadReadingFont, warmAppFonts } from "@/lib/fonts";
 import { restoreCustomFont } from "@/lib/custom-font";
@@ -1188,7 +1193,7 @@ export function DocsApp() {
     // Re-opening the document already on screen is not leaving it.
     if (!editorDirtyRef.current) return true;
     if (fileId && fileId === activeFileIdRef.current) return true;
-    return window.confirm("This document has unsaved changes. Leave and discard them?");
+    return window.confirm(DISCARD_PROMPT);
   }, []);
 
   const handleSelect = useCallback(
@@ -1340,10 +1345,30 @@ export function DocsApp() {
       const taken = new Set(snapshotRef.current.files.map((f) => f.name));
       const isMermaid = documentKind === "mermaid";
       const isBoard = documentKind === "board";
-      const name = uniqueFileName(
+      const extension = isBoard ? ".excalidraw" : isMermaid ? ".mmd" : ".md";
+      const suggested = uniqueFileName(
         isBoard ? "board.excalidraw" : isMermaid ? "animation.mmd" : "new.md",
         taken,
       );
+
+      // Ask for the name up front. Creating the document and leaving the reader
+      // to find Rename in a menu meant every new file started as "new.md", and
+      // a workspace filled up with documents named after nothing.
+      const entered = window.prompt("Name for the new file:", suggested);
+      // Cancel means cancel — no document, rather than one with the default name.
+      if (entered === null) return;
+      const trimmed = entered.trim();
+      // The extension is what routes a document to its viewer and editor, so it
+      // is appended when the reader leaves it off rather than left to chance.
+      const withExtension =
+        !trimmed || trimmed === extension
+          ? suggested
+          : trimmed.toLowerCase().endsWith(extension)
+            ? trimmed
+            : `${trimmed}${extension}`;
+      // A name already in use would make two documents indistinguishable in the
+      // sidebar, so it is disambiguated the same way the default one is.
+      const name = taken.has(withExtension) ? uniqueFileName(withExtension, taken) : withExtension;
       const id = `${name}-${crypto.randomUUID().slice(0, 8)}`;
       const content = isMermaid
         ? `---
@@ -2726,8 +2751,6 @@ flowchart LR
                 onClearStorage={clearAllStorage}
                 highlights={highlights}
                 onRemoveHighlight={removeHighlight}
-                onRestoreFromBin={restoreFromBin}
-                onDeleteForever={deleteForever}
                 onOpenSettings={openSettings}
                 onOpenSavedPage={openSavedPage}
                 onAddToSplit={openBeside}
@@ -2861,8 +2884,6 @@ flowchart LR
                     onClearStorage={clearAllStorage}
                     highlights={highlights}
                     onRemoveHighlight={removeHighlight}
-                    onRestoreFromBin={restoreFromBin}
-                    onDeleteForever={deleteForever}
                     onOpenSettings={(tab) => {
                       setDrawerOpen(false);
                       openSettings(tab);
@@ -2987,7 +3008,14 @@ flowchart LR
                                   onRemoveSaved={removeSaved}
                                   onOpenArtifact={openEmbeddedArtifact}
                                   readingMode={readingMode}
-                                  startInEditFileId={autoEditFileId}
+                                  // Only the focused pane may honour an edit
+                                  // request. `autoEditFileId` is a bare file id,
+                                  // and the same document can sit in more than
+                                  // one pane — every pane holding it would match
+                                  // and drop into its editor at once.
+                                  startInEditFileId={
+                                    pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
+                                  }
                                   onStartInEditConsumed={consumeStartInEdit}
                                 />
                               ) : (
