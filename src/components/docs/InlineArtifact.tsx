@@ -7,6 +7,7 @@ const DocumentViewer = lazy(() =>
   import("./DocumentViewer").then((module) => ({ default: module.DocumentViewer })),
 );
 import { MermaidBlock } from "./MermaidLazy";
+import { BoardEmbed } from "./BoardEmbed";
 import {
   prepareWorkspaceEmbeds,
   resolveWorkspaceArtifact,
@@ -76,6 +77,10 @@ export function InlineArtifact({
   const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
   const isPresentation = kind === "presentation";
   const isMermaid = kind === "mermaid";
+  // A board brings its own framed, fixed-height viewport (it is a canvas, not a
+  // document that flows), so it opts out of the generic one the same way a
+  // diagram does.
+  const isBoard = kind === "board";
 
   // Reading-only embed: no header, footer, or controls — just the content.
   return (
@@ -84,7 +89,7 @@ export function InlineArtifact({
         className={
           isPresentation
             ? "presentation-embed-viewport overflow-hidden rounded-xl border border-border"
-            : isMermaid
+            : isMermaid || isBoard
               ? "overflow-visible"
               : "artifact-viewport overflow-hidden rounded-xl border border-border"
         }
@@ -112,6 +117,7 @@ function renderArtifact(file: MdFile, objectUrl: string | null, context: Omit<Pr
   if (kind === "html")
     return <iframe title={file.name} srcDoc={file.content} sandbox="" className="artifact-html" />;
   if (kind === "mermaid") return <MermaidBlock code={file.content} name={file.name} />;
+  if (kind === "board") return <BoardEmbed content={file.content} name={file.name} />;
   if (kind === "markdown" || kind === "text") {
     if ((context.depth ?? 0) >= 4 || (context.ancestors ?? []).includes(file.id))
       return (

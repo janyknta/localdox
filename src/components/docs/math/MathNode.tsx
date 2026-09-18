@@ -6,13 +6,12 @@
 // and a failure that does not take the document with it.
 
 import { memo, useCallback, useMemo, useRef, useState } from "react";
-import { Check, ClipboardCopy, Code2, Sigma, ZoomIn } from "lucide-react";
+import { Check, ClipboardCopy } from "lucide-react";
 import { copyText } from "@/lib/share";
 import { extractLabel, isNumberSuppressed } from "@/lib/math/latex";
 import { slugLabel } from "@/lib/math/equation-registry";
 import { useMathContext } from "./MathContext";
 import { useMathRender } from "./use-math-render";
-import { MathZoom } from "./MathZoom";
 
 interface MathNodeProps {
   /** Original LaTeX, exactly as the author wrote it between the delimiters. */
@@ -55,9 +54,7 @@ function InlineMath({ latex }: { latex: string }) {
 function DisplayMath({ latex }: { latex: string }) {
   const { registry, preferences } = useMathContext();
   const state = useMathRender(latex, true, preferences.renderer);
-  const [zoomed, setZoomed] = useState(false);
-  const [showSource, setShowSource] = useState(false);
-  const [copied, setCopied] = useState<"latex" | "mathml" | null>(null);
+  const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Numbering comes from the registry, which numbered the whole document from
@@ -73,26 +70,15 @@ function DisplayMath({ latex }: { latex: string }) {
   const domId =
     entry?.domId ?? (extractLabel(latex) ? `eq-${slugLabel(extractLabel(latex)!)}` : undefined);
 
-  const flashCopied = useCallback((which: "latex" | "mathml") => {
-    setCopied(which);
-    if (copyTimer.current) clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(null), 1500);
-  }, []);
-
   // Copy LaTeX hands over the author's source, never anything reconstructed
   // from the rendered output — which is the whole reason the source is carried
   // through every layer untouched.
   const copyLatex = useCallback(() => {
     void copyText(latex);
-    flashCopied("latex");
-  }, [latex, flashCopied]);
-
-  const mathml = state.status === "ready" ? state.result.mathml : undefined;
-  const copyMathml = useCallback(() => {
-    if (!mathml) return;
-    void copyText(mathml);
-    flashCopied("mathml");
-  }, [mathml, flashCopied]);
+    setCopied(true);
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 1500);
+  }, [latex]);
 
   if (state.status === "error") {
     return (
@@ -138,8 +124,11 @@ function DisplayMath({ latex }: { latex: string }) {
         </span>
       )}
 
-      {/* Hover-revealed on a pointer device, always present on touch — the same
-          rule the code block's copy button follows. */}
+      {/* Copy alone. An equation is something a reader lifts out and pastes
+          elsewhere; zooming, MathML and a source pane were chrome around a
+          block that already shows its own source on failure and already scrolls
+          at full size. Hover-revealed on a pointer device, always present on
+          touch — the same rule the code block's copy button follows. */}
       <div className="docs-math-actions" role="group" aria-label="Equation actions">
         <button
           type="button"
@@ -147,54 +136,9 @@ function DisplayMath({ latex }: { latex: string }) {
           title="Copy LaTeX source"
           aria-label="Copy LaTeX source"
         >
-          {copied === "latex" ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : (
-            <ClipboardCopy className="h-3.5 w-3.5" />
-          )}
-        </button>
-        {mathml && (
-          <button type="button" onClick={copyMathml} title="Copy MathML" aria-label="Copy MathML">
-            {copied === "mathml" ? (
-              <Check className="h-3.5 w-3.5" />
-            ) : (
-              <Sigma className="h-3.5 w-3.5" />
-            )}
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={() => setZoomed(true)}
-          title="Zoom equation"
-          aria-label="Zoom equation"
-        >
-          <ZoomIn className="h-3.5 w-3.5" />
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowSource((open) => !open)}
-          title={showSource ? "Hide LaTeX source" : "Show LaTeX source"}
-          aria-label={showSource ? "Hide LaTeX source" : "Show LaTeX source"}
-          aria-expanded={showSource}
-        >
-          <Code2 className="h-3.5 w-3.5" />
+          {copied ? <Check className="h-3.5 w-3.5" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
         </button>
       </div>
-
-      {showSource && (
-        <pre className="docs-math-source">
-          <code>{latex}</code>
-        </pre>
-      )}
-
-      {zoomed && state.status === "ready" && (
-        <MathZoom
-          html={state.result.html}
-          latex={latex}
-          number={number}
-          onClose={() => setZoomed(false)}
-        />
-      )}
     </div>
   );
 }

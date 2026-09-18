@@ -50,7 +50,8 @@
       "Bash(node --experimental-strip-types --test tests/math.test.ts)",
       "Bash(grep -o '.\\\\{0,180\\\\}katex-B7rAX3Vi.\\\\{0,60\\\\}' .output/public/assets/chunk-WYO6CB5R-C-366P-a.js)",
       "Bash(curl -s -o /dev/null -w \"%{http_code} %{size_download}\\\\n\" http://localhost:5199/__test/corpus.md)",
-      "Bash(grep -n \"^/\\\\*\\\\*$\" -A9 src/lib/math/sanitize.ts)"
+      "Bash(grep -n \"^/\\\\*\\\\*$\" -A9 src/lib/math/sanitize.ts)",
+      "Bash(node --experimental-strip-types -e ' *)"
     ],
     "additionalDirectories": [
       "/System/Library/Fonts"
