@@ -31,6 +31,13 @@ export function ViewerHeader({
   const isMobile = useIsMobile();
   const headerRef = useHideOnScroll<HTMLDivElement>(isMobile);
 
+  // A file type that offers neither a section picker nor any per-view control
+  // has nothing to put in this bar, and an empty one still cost its full 3.5rem
+  // — on a 320x640 phone that was a fifth of the screen spent on two chrome
+  // bars, the lower of which was blank. Callers pass `undefined` rather than an
+  // empty fragment when they have nothing, so this stays a simple check.
+  if (!navAction && !actions) return null;
+
   return (
     <div
       ref={headerRef}

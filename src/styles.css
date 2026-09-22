@@ -1149,7 +1149,11 @@
 .interactive-split {
   min-height: 20rem;
 }
-.interactive-split > [data-panel-group-direction="horizontal"] {
+/* The group is the panel container; it must be allowed to shrink below its
+   content's intrinsic width or the code pane pushes the block wider than the
+   reading column. Keyed off the element the library gives us — it sets its own
+   flex-flow inline and emits no direction attribute to select on. */
+.interactive-split > [data-group] {
   min-width: 0;
 }
 .interactive-error {
@@ -1203,13 +1207,14 @@
   height: min(72vh, 960px) !important;
 }
 @media (max-width: 640px) {
+  /* Stacked at this width — the orientation itself is switched in
+     `InteractiveBlock`, since the library lays the group out from its own
+     prop. All this adds is the room two stacked panes need. */
   .interactive-split {
     min-height: 34rem;
-    flex-direction: column;
   }
-  .interactive-split > [data-panel-group-direction="horizontal"] {
-    min-height: 15rem;
-    width: 100% !important;
+  .interactive-split > [data-group] > [data-panel] {
+    min-height: 11rem;
   }
   .interactive-block-fullscreen {
     inset: 0.5rem;

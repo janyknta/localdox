@@ -1271,27 +1271,25 @@ function MarkdownViewerImpl({
             </Select>
           )
         }
+        /* Starring lives on the document's own row in the sidebar, and editing
+           lives in that row's menu. What is left here is the one control that
+           changes how this view reads — and when even that does not apply this
+           must be `undefined`, not an empty wrapper, or the header has no way
+           to tell it is empty and reserves its height for nothing. */
         actions={
-          <>
-            {/* Starring lives on the document's own row in the sidebar, and
-                editing lives in that row's menu. What is left here is the one
-                control that changes how this view reads. */}
-            <div className="flex items-center gap-1">
-              {!editMode && onToggleReadingMode && (
-                <button
-                  onClick={onToggleReadingMode}
-                  title={
-                    singleMode
-                      ? "Paged: read one section at a time"
-                      : "Single page: read the whole document"
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Files className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </>
+          !editMode && onToggleReadingMode ? (
+            <button
+              onClick={onToggleReadingMode}
+              title={
+                singleMode
+                  ? "Paged: read one section at a time"
+                  : "Single page: read the whole document"
+              }
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
+            >
+              <Files className="h-4 w-4" />
+            </button>
+          ) : undefined
         }
       />
       <div

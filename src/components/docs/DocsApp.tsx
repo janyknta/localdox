@@ -24,6 +24,7 @@ import { Sidebar, AddMenu, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { PaneDocument } from "./PaneDocument";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   activeFileOf,
   closeTab,
@@ -285,6 +286,10 @@ export function DocsApp() {
    */
   const [paneLayout, setPaneLayout] = useState<PaneLayout>(() => singlePane(null));
   const activeFileId = activeFileOf(paneLayout);
+  /* Two readable columns need roughly 2x the ~360px a document wants at its
+     narrowest, plus the handle between them — below that a split is worse than
+     no split, so the panes stack top to bottom instead of getting thinner. */
+  const splitStacks = useMediaQuery("(max-width: 767px)");
   const setActiveFileId = useCallback((fileId: string | null) => {
     setPaneLayout((layout) => {
       if (fileId === null) {
@@ -2919,8 +2924,19 @@ flowchart LR
                 /* Split view. Each pane carries its own tab strip and its own
                    document; the focused pane is what the rest of the app means
                    by "the active file", so nothing outside here has to know
-                   panes exist. */
-                <ResizablePanelGroup orientation="horizontal" className="h-full">
+                   panes exist.
+
+                   Side by side needs width to be worth anything: two panes of a
+                   320px phone are 160px each, narrower than the documents' own
+                   minimum and unreadable. Splitting is only offered from the
+                   docked sidebar, so a phone never opens one — but a desktop
+                   window narrowed with a split already open used to land
+                   exactly there. Below the width where two columns still read,
+                   the panes stack instead. */
+                <ResizablePanelGroup
+                  orientation={splitStacks ? "vertical" : "horizontal"}
+                  className="h-full"
+                >
                   {paneLayout.panes.map((pane, index) => {
                     const paneFile = files.find((f) => f.id === pane.activeTabId) ?? null;
                     const paneKind = paneFile
