@@ -134,7 +134,7 @@ function ModeTabs({
             tabIndex={selected ? 0 : -1}
             title={reason ?? MODE_HINT[option]}
             onClick={() => !reason && onChange(option)}
-            className={`inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+            className={`inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring coarse:h-11 coarse:px-3.5 coarse:text-xs ${
               reason
                 ? "cursor-not-allowed text-muted-foreground/40"
                 : selected
@@ -1146,7 +1146,7 @@ export function TrayButton({
       aria-label={label}
       aria-pressed={active}
       title={title ?? label}
-      className={`inline-flex h-8 w-8 items-center justify-center transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-accent/80 disabled:pointer-events-none disabled:opacity-60 ${
+      className={`inline-flex h-8 w-8 items-center justify-center transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-accent/80 disabled:pointer-events-none disabled:opacity-60 coarse:h-11 coarse:w-11 ${
         active ? "text-foreground" : "text-muted-foreground"
       }`}
     >

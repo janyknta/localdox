@@ -271,13 +271,13 @@ function MarkdownEditorImpl(
         <div className="flex items-center gap-2">
           <button
             onClick={cancel}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-opacity hover:bg-muted/80 active:scale-95"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition-opacity hover:bg-muted/80 active:scale-95 coarse:min-h-11 coarse:px-4"
           >
             Cancel
           </button>
           <button
             onClick={() => onDone(textareaRef.current?.selectionStart)}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background transition-opacity hover:opacity-90 active:scale-95 coarse:min-h-11 coarse:px-4"
           >
             <Eye className="h-3.5 w-3.5" /> Done · Preview
           </button>

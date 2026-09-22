@@ -586,7 +586,7 @@ function SidebarImpl({
         >
           <button
             onClick={() => toggleFolder(folder.id)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left coarse:min-h-11"
             aria-expanded={!collapsed}
           >
             <ChevronRight
@@ -759,7 +759,7 @@ function SidebarImpl({
               if (selecting) toggleSelection(file.id);
               else onSelect(file.id);
             }}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left coarse:min-h-11"
             aria-current={current ? "page" : undefined}
           >
             {!selecting && (
@@ -867,7 +867,7 @@ function SidebarImpl({
             {onOpenPalette && (
               <button
                 onClick={onOpenPalette}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                 aria-label="Search docs"
                 title="Search docs"
               >
@@ -877,7 +877,7 @@ function SidebarImpl({
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                 aria-label="Toggle sidebar"
                 title="Toggle sidebar"
               >
@@ -895,7 +895,7 @@ function SidebarImpl({
               disabled={!navHistory.canBack}
               aria-label={navHistory.backLabel}
               title={navHistory.backLabel}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 disabled:pointer-events-none disabled:opacity-40"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -904,7 +904,7 @@ function SidebarImpl({
               disabled={!navHistory.canForward}
               aria-label={navHistory.forwardLabel}
               title={navHistory.forwardLabel}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 disabled:pointer-events-none disabled:opacity-40"
             >
               <ArrowRight className="h-4 w-4" />
             </button>
@@ -922,7 +922,7 @@ function SidebarImpl({
             <button
               onClick={() => setViewMenuOpen((o) => !o)}
               aria-expanded={viewMenuOpen}
-              className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+              className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground coarse:min-h-11"
             >
               <span className="truncate">{VIEW_LABEL[view.mode]}</span>
               <ChevronRight
@@ -1129,7 +1129,7 @@ function SidebarImpl({
         {onOpenSavedPage && (
           <button
             onClick={onOpenSavedPage}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground coarse:min-h-11"
           >
             <Star className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
             <span className="min-w-0 flex-1 truncate">Saved</span>
@@ -1357,7 +1357,12 @@ function FileMenu({
           e.stopPropagation();
           setOpen((o) => !o);
         }}
-        className={`flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground ${open ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"}`}
+        /* From `md` up this reveals on hover, which on a touch tablet means it
+           never reveals at all — every per-file action (edit, rename, share,
+           remove) was unreachable there. `coarse:opacity-100` restores it, and
+           the ::before pads the 24px glyph to a 44px target; growing the button
+           itself would have re-flowed every row in the tree. */
+        className={`relative flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] ${open ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100 coarse:opacity-100"}`}
         aria-label="Options"
       >
         <MoreVertical className="h-4 w-4" />
@@ -1786,7 +1791,7 @@ export function AddMenu({
         title="Add to workspace"
         className={
           buttonClassName ??
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
         }
       >
         <Plus className="h-4 w-4" />

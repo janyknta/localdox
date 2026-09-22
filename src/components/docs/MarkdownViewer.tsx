@@ -1758,10 +1758,19 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
       {collapse && (
         <button
           onClick={() => collapse.toggle(finalId)}
-          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 md:flex ${
+          /* The hover-reveal above assumes a pointer that can hover. On a touch
+             tablet — where this is shown, being >=md — there is none, so an
+             expanded section's chevron never appeared and a reader could not
+             collapse anything; only re-expanding worked, because a collapsed
+             one is pinned visible. `coarse:opacity-100` gives touch the same
+             affordance a mouse gets. The ::before pads the 24px target out to
+             44px without moving it: the margin it sits in is narrower than 44px
+             at this breakpoint, so growing the box itself would push it off the
+             side of the screen. */
+          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] md:flex ${
             collapsed
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100"
           }`}
           aria-expanded={!collapsed}
           aria-controls={`${finalId}-section`}
@@ -1860,11 +1869,16 @@ function CodeBlock({ children, ...rest }: any) {
         }}
         aria-label={copied ? "Copied" : "Copy code"}
         /* A hover-only reveal leaves this button unreachable on touch, so
-           `hover-none:opacity-100` pins it there. */
-        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+           `hover-none:opacity-100` pins it there. Being permanently visible is
+           also why it loses its label on a touch device: the word doubled the
+           button's width, and parked over the first line of a code block on a
+           phone that was the difference between covering the end of a line and
+           covering half of it. The tick that replaces the icon still reports
+           the copy, and `aria-label` carries the name either way. */
+        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 coarse:min-h-11 coarse:min-w-11 coarse:justify-center coarse:px-0 [@media(hover:none)]:opacity-100"
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        {copied ? "Copied" : "Copy"}
+        <span className="coarse:hidden">{copied ? "Copied" : "Copy"}</span>
       </button>
       <pre ref={ref} {...rest}>
         {children}

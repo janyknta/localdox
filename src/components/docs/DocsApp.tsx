@@ -2812,7 +2812,7 @@ flowchart LR
                   <button
                     onClick={() => setDrawerOpen(false)}
                     aria-label="Close"
-                    className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -3159,7 +3159,7 @@ function Header({
         {!hideMenu && (
           <button
             onClick={() => onMenu?.()}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-transform hover:bg-accent active:scale-90 lg:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-transform hover:bg-accent active:scale-90 coarse:h-11 coarse:w-11 lg:hidden"
             aria-label="Menu"
           >
             <Menu className="h-4 w-4" />
@@ -3177,7 +3177,7 @@ function Header({
         )}
         <button
           onClick={onHome}
-          className="flex h-10 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-10 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground coarse:h-11"
           aria-label="Home"
           title="Home"
         >
@@ -3209,7 +3209,7 @@ function Header({
         {hasFiles && (
           <button
             onClick={onOpenPalette}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 lg:hidden"
             aria-label="Search"
           >
             <Search className="h-4 w-4" />
@@ -3245,7 +3245,7 @@ function Header({
         {onOpenSettings && (
           <button
             onClick={() => onOpenSettings()}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
             aria-label="Settings"
             title="Settings"
           >

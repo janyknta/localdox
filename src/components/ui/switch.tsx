@@ -9,7 +9,13 @@ const Switch = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
     className={cn(
-      "peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input",
+      // The track is 36x20, which is the size it should look. A finger needs
+      // 44x44, so on a touch device an invisible pseudo-element pads the hit
+      // area out to that without moving anything on screen — growing the track
+      // itself would have made every settings row read as a bigger control
+      // than it is. Switches always sit alone in a row here, so the padded
+      // areas cannot overlap a neighbour's.
+      "peer relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input coarse:before:absolute coarse:before:-inset-x-1 coarse:before:-inset-y-3 coarse:before:content-['']",
       className,
     )}
     {...props}
