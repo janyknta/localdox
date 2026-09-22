@@ -30,6 +30,7 @@ import {
   closeTab,
   hydratePanes,
   openInPane,
+  revealInPane,
   singlePane,
   splitPane,
   toPersisted,
@@ -302,7 +303,11 @@ export function DocsApp() {
           ),
         };
       }
-      return openInPane(layout, fileId);
+      // Not `openInPane`: a document already showing in another column belongs
+      // to that column. Cloning it into the focused pane put the same file on
+      // screen twice, and actions addressed to it — "Edit" above all — then
+      // fired in every copy at once.
+      return revealInPane(layout, fileId);
     });
   }, []);
 
@@ -3003,7 +3008,17 @@ flowchart LR
                                   onRemoveSaved={removeSaved}
                                   onOpenArtifact={openEmbeddedArtifact}
                                   readingMode={readingMode}
-                                  startInEditFileId={autoEditFileId}
+                                  // An edit request belongs to the column the
+                                  // reader is working in, not to every column
+                                  // showing that document. `revealInPane` has
+                                  // already moved focus to the pane holding the
+                                  // file, so this is that pane — and the same
+                                  // document deliberately opened side by side
+                                  // with itself no longer drops both copies
+                                  // into the editor at once.
+                                  startInEditFileId={
+                                    pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
+                                  }
                                   onStartInEditConsumed={consumeStartInEdit}
                                 />
                               ) : (

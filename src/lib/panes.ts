@@ -88,6 +88,40 @@ export function openInPane(layout: PaneLayout, fileId: string, paneId?: string):
 }
 
 /**
+ * Bring a file to the front wherever it is already open, and only open it in
+ * the focused pane when no pane is showing it.
+ *
+ * Opening it into the focused pane unconditionally is what let one document
+ * appear in two columns at once: the sidebar's actions address a file by id,
+ * so every copy answered to them together — clicking "Edit" on a document
+ * sitting beside the focused one dropped *both* columns into the editor.
+ * Following the document to its own column keeps one file to one pane.
+ */
+export function revealInPane(layout: PaneLayout, fileId: string): PaneLayout {
+  const focused = layout.panes.find((pane) => pane.id === layout.focusedPaneId);
+
+  // A pane *showing* the document wins over one merely holding it as a
+  // background tab — including over the focused pane. Panes accumulate tabs,
+  // so the column the reader is working in is quite likely to still carry the
+  // file from whenever it was last opened there; preferring that stale tab is
+  // what put the same document in two columns at once even after the file had
+  // been split out into a column of its own.
+  const showing =
+    focused?.activeTabId === fileId
+      ? focused
+      : layout.panes.find((pane) => pane.activeTabId === fileId);
+  // Failing that, a background tab: the focused pane's first, so opening a
+  // document it already carries doesn't send the reader to another column.
+  const holder =
+    showing ??
+    (focused?.tabs.includes(fileId)
+      ? focused
+      : layout.panes.find((pane) => pane.tabs.includes(fileId)));
+
+  return openInPane(layout, fileId, holder?.id);
+}
+
+/**
  * Close one tab.
  *
  * Emptying a pane closes the pane itself — except the last one, which stays as
