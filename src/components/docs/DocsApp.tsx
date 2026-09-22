@@ -2752,8 +2752,6 @@ flowchart LR
                 onClearStorage={clearAllStorage}
                 highlights={highlights}
                 onRemoveHighlight={removeHighlight}
-                onRestoreFromBin={restoreFromBin}
-                onDeleteForever={deleteForever}
                 onOpenSettings={openSettings}
                 onOpenSavedPage={openSavedPage}
                 onAddToSplit={openBeside}
@@ -2887,8 +2885,6 @@ flowchart LR
                     onClearStorage={clearAllStorage}
                     highlights={highlights}
                     onRemoveHighlight={removeHighlight}
-                    onRestoreFromBin={restoreFromBin}
-                    onDeleteForever={deleteForever}
                     onOpenSettings={(tab) => {
                       setDrawerOpen(false);
                       openSettings(tab);
