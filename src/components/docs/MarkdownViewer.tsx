@@ -172,6 +172,11 @@ interface Props {
   /** Opens the workspace command palette from the header's search field. */
   onOpenPalette?: () => void;
   onRemoveFile?: () => void;
+  /**
+   * Rename the open document, offered as a field above the source while the
+   * editor is open. Omitted where the viewer is read-only.
+   */
+  onRenameFile?: (name: string) => void;
   /** Copy a share link to this one file. Hidden when omitted. */
   onShareFile?: () => void;
   readingMode?: ReadingMode;
@@ -313,6 +318,7 @@ function MarkdownViewerImpl({
   onOpenArtifact,
   onOpenPalette,
   onRemoveFile,
+  onRenameFile,
   onShareFile,
   readingMode = "paginated",
   onToggleReadingMode,
@@ -1633,6 +1639,8 @@ function MarkdownViewerImpl({
                 onCancel={cancelEdit}
                 onDirtyChange={setEditorDirty}
                 inspectMissed={inspectMissed}
+                fileName={file.name}
+                onRename={onRenameFile}
               />
             ) : (
               <div

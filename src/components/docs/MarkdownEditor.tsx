@@ -62,13 +62,35 @@ interface Props {
    * changes in it is worth stopping the reader for.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Name of the document being edited, shown as a field above the source. */
+  fileName?: string;
+  /**
+   * Rename the document. Omitted where renaming isn't on offer, in which case
+   * the field is replaced by the plain autosave notice it used to be.
+   *
+   * A blank document is created as `new.md` and dropped straight into this
+   * editor, which left naming it stranded in the sidebar's three-dots menu —
+   * somewhere you had to leave the document to reach. The name belongs with
+   * the text it names.
+   */
+  onRename?: (name: string) => void;
 }
 
 /** How long typing has to pause before the draft is handed to the parent. */
 const AUTOSAVE_MS = 500;
 
 function MarkdownEditorImpl(
-  { initialContent, fileId, onSave, onDone, onCancel, inspectMissed, onDirtyChange }: Props,
+  {
+    initialContent,
+    fileId,
+    onSave,
+    onDone,
+    onCancel,
+    inspectMissed,
+    onDirtyChange,
+    fileName,
+    onRename,
+  }: Props,
   handleRef: React.Ref<MarkdownEditorHandle>,
 ) {
   // The draft and the document it belongs to are one piece of state, set
@@ -251,6 +273,42 @@ function MarkdownEditorImpl(
     [applyFormat],
   );
 
+  // The name is edited locally and committed on blur or Enter, not on every
+  // keystroke: renaming re-derives the document's kind from its extension, and
+  // doing that mid-word would route the reader through a different viewer for
+  // each letter they typed.
+  const [nameDraft, setNameDraft] = useState(fileName ?? "");
+  useEffect(() => {
+    setNameDraft(fileName ?? "");
+  }, [fileName, fileId]);
+
+  const commitName = useCallback(() => {
+    const next = nameDraft.trim();
+    if (!next || next === fileName) {
+      setNameDraft(fileName ?? "");
+      return;
+    }
+    onRename?.(next);
+  }, [nameDraft, fileName, onRename]);
+
+  const onNameKey = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitName();
+        textareaRef.current?.focus();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        // Stop here rather than letting the app's Escape handling also read
+        // this as "leave the editor" — abandoning a rename is its own step.
+        event.stopPropagation();
+        setNameDraft(fileName ?? "");
+        event.currentTarget.blur();
+      }
+    },
+    [commitName, fileName],
+  );
+
   const cancel = useCallback(() => {
     // Order matters: the flag has to be set before the parent unmounts this
     // component, or the cleanup above would re-save the discarded draft.
@@ -265,9 +323,24 @@ function MarkdownEditorImpl(
           the reader scrolls. Single-pane editor keeps typing smooth — no live
           full-document re-render on every keystroke. */}
       <div className="sticky top-16 z-(--z-sticky) -mx-1 mb-4 flex items-center justify-between gap-3 rounded-lg border border-border bg-background/90 px-3 py-2">
-        <span className="truncate text-xs font-medium text-muted-foreground">
-          Editing — changes save automatically
-        </span>
+        <div className="min-w-0 flex-1">
+          {onRename ? (
+            <input
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={onNameKey}
+              spellCheck={false}
+              aria-label="Document name"
+              placeholder="Untitled.md"
+              className="w-full max-w-xs truncate rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground outline-none transition-colors hover:border-border focus:border-primary/50 focus:bg-background coarse:min-h-11"
+            />
+          ) : (
+            <span className="truncate text-xs font-medium text-muted-foreground">
+              Editing — changes save automatically
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={cancel}

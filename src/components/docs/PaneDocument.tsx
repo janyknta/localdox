@@ -38,6 +38,7 @@ export function PaneDocument({
   workspaceRevision,
   workspaceName,
   onContentChange,
+  onRenameFile,
   onAddHighlight,
   onUpdateHighlight,
   onRemoveHighlight,
@@ -61,6 +62,7 @@ export function PaneDocument({
   workspaceRevision: string;
   workspaceName: string;
   onContentChange: (fileId: string, content: string) => void;
+  onRenameFile: (fileId: string, name: string) => void;
   onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">, fileId: string) => void;
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
@@ -105,6 +107,10 @@ export function PaneDocument({
     (draft: SavedDraft) => onToggleSaved(file.id, draft),
     [onToggleSaved, file.id],
   );
+  const renameFile = useCallback(
+    (name: string) => onRenameFile(file.id, name),
+    [onRenameFile, file.id],
+  );
 
   // A split is a layout concern, not a document-type mode. Resolve the viewer
   // for this pane alone so markdown, boards, PDFs, spreadsheets, and every
@@ -145,6 +151,7 @@ export function PaneDocument({
       pendingSearch={pendingSearch}
       onSearchShown={onSearchShown}
       onContentChange={onContentChange}
+      onRenameFile={renameFile}
       startInEditFileId={startInEditFileId}
       onStartInEditConsumed={onStartInEditConsumed}
       nextReadingMin={null}

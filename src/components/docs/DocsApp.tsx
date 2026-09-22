@@ -2224,6 +2224,15 @@ flowchart LR
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+  /** Rename from the name field the editor puts above the source. */
+  const renameActiveFile = useCallback(
+    (name: string) => {
+      const id = activeFileIdRef.current;
+      if (id) renameFile(id, name);
+    },
+    [renameFile],
+  );
+
   const clearPendingSaved = useCallback(() => setPendingSaved(null), []);
   const clearPendingSearch = useCallback(() => setPendingSearch(null), []);
 
@@ -3012,6 +3021,7 @@ flowchart LR
                                   workspaceRevision={workspaceRevision}
                                   workspaceName={workspaceNameRef.current}
                                   onContentChange={handleContentChange}
+                                  onRenameFile={renameFile}
                                   onAddHighlight={addHighlight}
                                   onUpdateHighlight={updateHighlight}
                                   onRemoveHighlight={removeHighlight}
@@ -3091,6 +3101,7 @@ flowchart LR
                   pendingSearch={pendingSearch?.fileId === activeFile.id ? pendingSearch : null}
                   onSearchShown={clearPendingSearch}
                   onHome={goHome}
+                  onRenameFile={renameActiveFile}
                   onShareFile={shareActiveFile}
                   onAskAi={aiEnabled ? askAiFromSelection : undefined}
                   readingMode={readingMode}
