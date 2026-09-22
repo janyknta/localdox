@@ -402,10 +402,24 @@ function MarkdownViewerImpl({
     },
     [onContentChange, file.id, file, singleMode, onNav],
   );
-  const enterEditMode = useCallback(() => {
-    originalContentRef.current = file.content;
-    setEditMode(true);
-  }, [file.content]);
+  /**
+   * Snapshot the source Cancel restores, every time the editor opens.
+   *
+   * This used to be captured only on a document switch (and by a header button
+   * that no longer exists), which quietly made Cancel destructive: autosave
+   * writes the draft into `file.content` as you type, so a *second* editing
+   * session on the same document still held the text from when the document
+   * was first opened. Cancelling that session reverted the document past the
+   * work the first session had already saved.
+   *
+   * Read through a ref rather than a dependency so the snapshot is taken on the
+   * transition into the editor and never refreshed by autosave afterwards.
+   */
+  const liveContentRef = useRef(file.content);
+  liveContentRef.current = file.content;
+  useEffect(() => {
+    if (editMode) originalContentRef.current = liveContentRef.current;
+  }, [editMode]);
 
   const exportPDF = useCallback(() => {
     window.print();
