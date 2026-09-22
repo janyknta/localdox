@@ -150,6 +150,19 @@ interface Props {
    */
   pendingSaved?: SavedItem | null;
   onSavedShown?: () => void;
+  /**
+   * A search hit the reader just opened from the palette: the line it matched,
+   * and the query that found it. Scroll to that passage and flash it, then call
+   * `onSearchShown` so it isn't replayed on re-render.
+   *
+   * Selecting a hit used to move only as far as the heading above it — and when
+   * the hit's heading id didn't survive per-page rendering (repeated heading
+   * text is slugged against the whole document, but each page is slugged on its
+   * own) not even that far, leaving the reader at the top of the page with the
+   * match somewhere below the fold.
+   */
+  pendingSearch?: { text: string; query: string } | null;
+  onSearchShown?: () => void;
   onHome?: () => void;
   workspaceId?: string | null;
   workspaceRevision?: string;
@@ -168,6 +181,51 @@ interface Props {
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
+
+/** The element a range starts in, which is what actually scrolls. */
+const elementOf = (range: Range | null) =>
+  range
+    ? ((range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as HTMLElement)
+        : range.startContainer.parentElement) ?? null)
+    : null;
+
+/** How long a jumped-to passage stays lit. */
+const FLASH_MS = 1800;
+
+/**
+ * The CSS Custom Highlight API, as much of it as is needed here and only where
+ * the browser has it. Typed locally because it is still absent from the DOM
+ * lib this project builds against.
+ */
+type HighlightRegistry = Map<string, object> | undefined;
+const highlightRegistry = (): HighlightRegistry =>
+  typeof CSS !== "undefined"
+    ? (CSS as unknown as { highlights?: Map<string, object> }).highlights
+    : undefined;
+
+/**
+ * Flash a passage once, so that arriving somewhere is visible and not merely
+ * true. Shared by the saved-item jump and the search jump.
+ *
+ * A text range gets a one-shot custom highlight, which can span elements; a
+ * heading or an image, which arrive without a range, get the equivalent
+ * class-based pulse.
+ */
+function flashPassage(range: Range | null, target: HTMLElement | null) {
+  const registry = highlightRegistry();
+  const HighlightCtor = (globalThis as { Highlight?: new (...ranges: Range[]) => object })
+    .Highlight;
+  let clear: (() => void) | undefined;
+  if (range && registry && HighlightCtor) {
+    registry.set("dc-saved-flash", new HighlightCtor(range));
+    clear = () => void registry.delete("dc-saved-flash");
+  } else if (target) {
+    target.classList.add("docs-saved-flash");
+    clear = () => target.classList.remove("docs-saved-flash");
+  }
+  if (clear) setTimeout(clear, FLASH_MS);
+}
 
 /**
  * Viewer-specific remark passes, held at module scope so the array identity is
@@ -245,6 +303,8 @@ function MarkdownViewerImpl({
   onRemoveSaved,
   pendingSaved,
   onSavedShown,
+  pendingSearch,
+  onSearchShown,
   onHome,
   workspaceId,
   workspaceRevision,
@@ -570,20 +630,7 @@ function MarkdownViewerImpl({
               : range.startContainer.parentElement) ?? null)
           : null);
       target?.scrollIntoView({ behavior: "smooth", block: heading ? "start" : "center" });
-
-      // Flash: a text range gets a one-shot CSS highlight, a heading or image
-      // (which have no range) get the equivalent class-based pulse.
-      const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
-        Map<string, any> | undefined;
-      let clear: (() => void) | undefined;
-      if (range && CSSH && typeof (window as any).Highlight !== "undefined") {
-        CSSH.set("dc-saved-flash", new (window as any).Highlight(range));
-        clear = () => CSSH.delete("dc-saved-flash");
-      } else if (target) {
-        target.classList.add("docs-saved-flash");
-        clear = () => target.classList.remove("docs-saved-flash");
-      }
-      if (clear) setTimeout(clear, 1800);
+      flashPassage(range, target);
 
       onSavedShown?.();
     });
@@ -947,6 +994,39 @@ function MarkdownViewerImpl({
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
+
+  /**
+   * Land on the search hit itself.
+   *
+   * Declared after the two heading scrolls and deferred a frame, so it is the
+   * last word on where the reader ends up: those effects have already moved to
+   * the heading (or given up and gone to the top) by the time this runs, and a
+   * second smooth scroll simply retargets the first.
+   *
+   * Anchored by the matched line, falling back to the query itself — a line may
+   * render differently from its source (markdown syntax is stripped, a match
+   * inside a link or emphasis is split across elements), and the query is the
+   * shortest thing guaranteed to be somewhere in the text.
+   */
+  useEffect(() => {
+    if (!pendingSearch || editMode) return;
+    if (!contentRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const container = contentRef.current;
+      if (!container) return;
+      const range =
+        firstTextRange(container, pendingSearch.text) ??
+        (pendingSearch.query ? firstTextRange(container, pendingSearch.query) : null);
+      const target = elementOf(range);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The same one-shot flash a saved item gets, for the same reason: on a
+      // dense page, arriving is not the same as seeing where you arrived.
+      flashPassage(range, target);
+
+      onSearchShown?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingSearch, editMode, renderContent, fullRender, onSearchShown]);
 
   // Reading progress now lives in <ReadingProgress>, which writes the
   // percentage straight to its own DOM node. It used to be state up here, and

@@ -388,6 +388,15 @@ export function DocsApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
+  /**
+   * A search hit the reader just opened, held until the viewer has scrolled to
+   * it. Cleared through `onSearchShown` so it is not replayed on re-render.
+   */
+  const [pendingSearch, setPendingSearch] = useState<{
+    fileId: string;
+    text: string;
+    query: string;
+  } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // File ids in most-recently-opened order — drives the "Recent" chip.
   const [recentFileIds, setRecentFileIds] = useState<string[]>([]);
@@ -1202,10 +1211,16 @@ export function DocsApp() {
   }, []);
 
   const handleSelect = useCallback(
-    (fileId: string, headingId?: string, query?: string) => {
+    (fileId: string, headingId?: string, query?: string, matchedLine?: string) => {
       if (!confirmDiscardDraft(fileId)) return;
       setActiveFileId(fileId);
       if (query !== undefined) setHighlightQuery(query || null);
+      // A search hit knows the line it matched, so the viewer can scroll to the
+      // passage instead of to the heading above it. Always a fresh object, so
+      // running the same search twice still moves the reader the second time.
+      setPendingSearch(
+        matchedLine ? { fileId, text: matchedLine, query: query?.trim() || "" } : null,
+      );
 
       let targetHeadingId = headingId;
       if (!targetHeadingId) {
@@ -2210,6 +2225,7 @@ flowchart LR
     [],
   );
   const clearPendingSaved = useCallback(() => setPendingSaved(null), []);
+  const clearPendingSearch = useCallback(() => setPendingSearch(null), []);
 
   const nextReadingMinutes = useMemo(
     () => (nextFile ? readingMinutes(nextFile.content) : null),
@@ -3020,6 +3036,18 @@ flowchart LR
                                     pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
                                   }
                                   onStartInEditConsumed={consumeStartInEdit}
+                                  // Only the pane showing the document a jump
+                                  // names is told about it.
+                                  activeSubtopicId={
+                                    paneFile.id === activeFileId ? activeHeadingId : null
+                                  }
+                                  highlightQuery={
+                                    paneFile.id === activeFileId ? highlightQuery : null
+                                  }
+                                  pendingSearch={
+                                    pendingSearch?.fileId === paneFile.id ? pendingSearch : null
+                                  }
+                                  onSearchShown={clearPendingSearch}
                                 />
                               ) : (
                                 <p className="px-2 py-16 text-center text-sm text-muted-foreground">
@@ -3064,6 +3092,8 @@ flowchart LR
                   onRemoveSaved={removeSaved}
                   pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
                   onSavedShown={clearPendingSaved}
+                  pendingSearch={pendingSearch?.fileId === activeFile.id ? pendingSearch : null}
+                  onSearchShown={clearPendingSearch}
                   onHome={goHome}
                   onShareFile={shareActiveFile}
                   onAskAi={aiEnabled ? askAiFromSelection : undefined}
