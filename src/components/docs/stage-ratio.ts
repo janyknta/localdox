@@ -49,15 +49,30 @@ export function clampStageRatio(ratio: number): number {
 export const MAX_STAGE_RATIO = TALL_STAGE_RATIO;
 
 /**
+ * The narrowest a diagram frame may be squeezed, whatever its proportions.
+ *
+ * The frame is not just the picture: it carries the mode tabs and the action
+ * tray along its top, which on a touch device need about 230px between them.
+ * The cap below is derived from viewport *height*, so a short window — a phone
+ * held sideways, where `70vh` is only ~270px — drove it well under that and
+ * clipped the toolbar inside a frame too narrow to hold it. Widths above this
+ * are unaffected; `max()` only ever raises the floor.
+ */
+const MIN_STAGE_WIDTH = "17rem";
+
+/**
  * The width a stage (and the frame around it) should take for a given ratio.
  *
  * A fitted stage is capped to a screenful of height, so the width preserving
  * the diagram's proportions is `height / ratio`. A tall stage is not capped at
  * all: it takes the full column, and its height follows from that width.
+ *
+ * This is a *max*-width, so the floor cannot overflow a narrow column: the
+ * frame still only takes the width its container actually offers.
  */
 export function stageWidthCap(ratio: number): string | undefined {
   if (isTallStage(ratio)) return undefined;
-  return `min(32rem, 70vh) / ${ratio}`;
+  return `max(${MIN_STAGE_WIDTH}, min(32rem, 70vh) / ${ratio})`;
 }
 
 /** The diagram's own size, in viewBox units, as Mermaid laid it out. */

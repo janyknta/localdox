@@ -21,6 +21,18 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
+ * `coarse:` — styles that apply only where the primary pointer is a finger.
+ *
+ * Touch and mouse want different control sizes, and viewport width is a poor
+ * proxy for which one is in use: a 1024px iPad is touch-only, and a 700px-wide
+ * desktop window is not. Apple's HIG asks for a 44x44pt minimum target and
+ * Material for 48dp; every control below that size here is widened under this
+ * variant and left alone for a mouse, so the dense desktop layout the app was
+ * designed around survives intact.
+ */
+@custom-variant coarse (@media (pointer: coarse));
+
+/*
  * Design system definition.
  *
  * The @theme inline block maps CSS custom properties to Tailwind utility
@@ -198,7 +210,6 @@
  * is needed here.
  */
 
-
 /*
  * Reading typeface, selected via the `data-font` attribute on <html>. Overrides
  * the body + heading font vars; body/tables inherit body, code stays mono.
@@ -238,6 +249,32 @@
 
   ::selection {
     background: var(--selection);
+  }
+}
+
+/*
+ * Never let a text field render smaller than 16px on a touch device.
+ *
+ * iOS Safari zooms the whole page in when a field with a smaller face takes
+ * focus, and it does not zoom back out — the reader is left on a document
+ * scrolled sideways, having to pinch back every time they type. Most fields
+ * here are 14px (`text-sm`), so this hit the workspace-name box, the Google
+ * Fonts field, the API-key field, the AI composer and every code editor.
+ *
+ * `max(16px, 1em)` keeps anything deliberately larger — the code editors
+ * inherit their own size — and only raises what falls under the threshold.
+ * Scoped to coarse pointers, so the desktop layout keeps its 14px controls.
+ * Checkboxes, radios, ranges and colour wells carry no text and are left out.
+ *
+ * Deliberately outside `@layer` — Tailwind's utilities live in a layer, and
+ * unlayered rules outrank every layered one however specific. Inside
+ * `@layer base` this lost to the `text-sm` on each field and did nothing.
+ */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em);
   }
 }
 
@@ -1112,7 +1149,11 @@
 .interactive-split {
   min-height: 20rem;
 }
-.interactive-split > [data-panel-group-direction="horizontal"] {
+/* The group is the panel container; it must be allowed to shrink below its
+   content's intrinsic width or the code pane pushes the block wider than the
+   reading column. Keyed off the element the library gives us — it sets its own
+   flex-flow inline and emits no direction attribute to select on. */
+.interactive-split > [data-group] {
   min-width: 0;
 }
 .interactive-error {
@@ -1166,13 +1207,14 @@
   height: min(72vh, 960px) !important;
 }
 @media (max-width: 640px) {
+  /* Stacked at this width — the orientation itself is switched in
+     `InteractiveBlock`, since the library lays the group out from its own
+     prop. All this adds is the room two stacked panes need. */
   .interactive-split {
     min-height: 34rem;
-    flex-direction: column;
   }
-  .interactive-split > [data-panel-group-direction="horizontal"] {
-    min-height: 15rem;
-    width: 100% !important;
+  .interactive-split > [data-group] > [data-panel] {
+    min-height: 11rem;
   }
   .interactive-block-fullscreen {
     inset: 0.5rem;

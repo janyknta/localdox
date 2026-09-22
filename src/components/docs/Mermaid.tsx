@@ -114,7 +114,12 @@ function ModeTabs({
       role="tablist"
       aria-label="Diagram presentation"
       onKeyDown={onKeyDown}
-      className="pointer-events-auto flex items-center overflow-hidden rounded-lg border border-border/70 bg-background/85 p-0.5 shadow-sm ring-1 ring-black/2 backdrop-blur-md"
+      // `shrink-0`: this sat in a `justify-between` row beside the action tray
+      // and, being the flexible one, was the item that gave way when the two no
+      // longer fit. Below ~360px it lost about 30px — enough that "Flow" was
+      // clipped by the `overflow-hidden` here and could not be tapped at all.
+      // The row it lives in wraps now, so neither group has to yield.
+      className="pointer-events-auto flex shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-background/85 p-0.5 shadow-sm ring-1 ring-black/2 backdrop-blur-md"
     >
       {MODE_ORDER.map((option) => {
         const selected = option === mode;
@@ -134,7 +139,7 @@ function ModeTabs({
             tabIndex={selected ? 0 : -1}
             title={reason ?? MODE_HINT[option]}
             onClick={() => !reason && onChange(option)}
-            className={`inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+            className={`inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-medium transition-colors duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring coarse:h-11 coarse:px-3.5 coarse:text-xs ${
               reason
                 ? "cursor-not-allowed text-muted-foreground/40"
                 : selected
@@ -397,7 +402,13 @@ export function Mermaid({
    * hand back a file of something the reader is not looking at.
    */
   const header = (
-    <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-background/40 px-2 py-1.5">
+    // Wraps to a second line rather than squeezing its two groups. A diagram
+    // inside the reading column is only ~270px wide on a small phone, which is
+    // less than the mode tabs and the action tray need side by side; when they
+    // were forced to share it the tabs were silently cut off. Wrapping keeps
+    // every control full-size and reachable, and on any screen wide enough for
+    // both it still renders as the single row it always was.
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border/70 bg-background/40 px-2 py-1.5">
       {modeControl}
       {/* Plain icons rather than an overflow menu. There are only ever two or
           three of these, and a menu made the reader open something to find out
@@ -1115,7 +1126,7 @@ function MermaidError({ error }: { error: string }) {
  */
 export function Tray({ children }: { children: React.ReactNode }) {
   return (
-    <div className="pointer-events-auto flex items-center overflow-hidden rounded-lg border border-border/70 bg-background/85 shadow-sm ring-1 ring-black/2 backdrop-blur-md [&>*+*]:border-l [&>*+*]:border-border/60">
+    <div className="pointer-events-auto flex shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-background/85 shadow-sm ring-1 ring-black/2 backdrop-blur-md [&>*+*]:border-l [&>*+*]:border-border/60">
       {children}
     </div>
   );
@@ -1146,7 +1157,7 @@ export function TrayButton({
       aria-label={label}
       aria-pressed={active}
       title={title ?? label}
-      className={`inline-flex h-8 w-8 items-center justify-center transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-accent/80 disabled:pointer-events-none disabled:opacity-60 ${
+      className={`inline-flex h-8 w-8 items-center justify-center transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:bg-accent/80 disabled:pointer-events-none disabled:opacity-60 coarse:h-11 coarse:w-11 ${
         active ? "text-foreground" : "text-muted-foreground"
       }`}
     >

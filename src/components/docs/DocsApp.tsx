@@ -24,11 +24,13 @@ import { Sidebar, AddMenu, DEFAULT_VIEW, type SidebarView } from "./Sidebar";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { PaneDocument } from "./PaneDocument";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   activeFileOf,
   closeTab,
   hydratePanes,
   openInPane,
+  revealInPane,
   singlePane,
   splitPane,
   toPersisted,
@@ -285,6 +287,10 @@ export function DocsApp() {
    */
   const [paneLayout, setPaneLayout] = useState<PaneLayout>(() => singlePane(null));
   const activeFileId = activeFileOf(paneLayout);
+  /* Two readable columns need roughly 2x the ~360px a document wants at its
+     narrowest, plus the handle between them — below that a split is worse than
+     no split, so the panes stack top to bottom instead of getting thinner. */
+  const splitStacks = useMediaQuery("(max-width: 767px)");
   const setActiveFileId = useCallback((fileId: string | null) => {
     setPaneLayout((layout) => {
       if (fileId === null) {
@@ -297,7 +303,11 @@ export function DocsApp() {
           ),
         };
       }
-      return openInPane(layout, fileId);
+      // Not `openInPane`: a document already showing in another column belongs
+      // to that column. Cloning it into the focused pane put the same file on
+      // screen twice, and actions addressed to it — "Edit" above all — then
+      // fired in every copy at once.
+      return revealInPane(layout, fileId);
     });
   }, []);
 
@@ -378,6 +388,15 @@ export function DocsApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
+  /**
+   * A search hit the reader just opened, held until the viewer has scrolled to
+   * it. Cleared through `onSearchShown` so it is not replayed on re-render.
+   */
+  const [pendingSearch, setPendingSearch] = useState<{
+    fileId: string;
+    text: string;
+    query: string;
+  } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // File ids in most-recently-opened order — drives the "Recent" chip.
   const [recentFileIds, setRecentFileIds] = useState<string[]>([]);
@@ -1192,10 +1211,16 @@ export function DocsApp() {
   }, []);
 
   const handleSelect = useCallback(
-    (fileId: string, headingId?: string, query?: string) => {
+    (fileId: string, headingId?: string, query?: string, matchedLine?: string) => {
       if (!confirmDiscardDraft(fileId)) return;
       setActiveFileId(fileId);
       if (query !== undefined) setHighlightQuery(query || null);
+      // A search hit knows the line it matched, so the viewer can scroll to the
+      // passage instead of to the heading above it. Always a fresh object, so
+      // running the same search twice still moves the reader the second time.
+      setPendingSearch(
+        matchedLine ? { fileId, text: matchedLine, query: query?.trim() || "" } : null,
+      );
 
       let targetHeadingId = headingId;
       if (!targetHeadingId) {
@@ -2199,7 +2224,17 @@ flowchart LR
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+  /** Rename from the name field the editor puts above the source. */
+  const renameActiveFile = useCallback(
+    (name: string) => {
+      const id = activeFileIdRef.current;
+      if (id) renameFile(id, name);
+    },
+    [renameFile],
+  );
+
   const clearPendingSaved = useCallback(() => setPendingSaved(null), []);
+  const clearPendingSearch = useCallback(() => setPendingSearch(null), []);
 
   const nextReadingMinutes = useMemo(
     () => (nextFile ? readingMinutes(nextFile.content) : null),
@@ -2726,8 +2761,6 @@ flowchart LR
                 onClearStorage={clearAllStorage}
                 highlights={highlights}
                 onRemoveHighlight={removeHighlight}
-                onRestoreFromBin={restoreFromBin}
-                onDeleteForever={deleteForever}
                 onOpenSettings={openSettings}
                 onOpenSavedPage={openSavedPage}
                 onAddToSplit={openBeside}
@@ -2812,7 +2845,7 @@ flowchart LR
                   <button
                     onClick={() => setDrawerOpen(false)}
                     aria-label="Close"
-                    className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    className="-mr-2 inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                   >
                     <X className="h-4 w-4" />
                   </button>
@@ -2861,8 +2894,6 @@ flowchart LR
                     onClearStorage={clearAllStorage}
                     highlights={highlights}
                     onRemoveHighlight={removeHighlight}
-                    onRestoreFromBin={restoreFromBin}
-                    onDeleteForever={deleteForever}
                     onOpenSettings={(tab) => {
                       setDrawerOpen(false);
                       openSettings(tab);
@@ -2919,8 +2950,19 @@ flowchart LR
                 /* Split view. Each pane carries its own tab strip and its own
                    document; the focused pane is what the rest of the app means
                    by "the active file", so nothing outside here has to know
-                   panes exist. */
-                <ResizablePanelGroup orientation="horizontal" className="h-full">
+                   panes exist.
+
+                   Side by side needs width to be worth anything: two panes of a
+                   320px phone are 160px each, narrower than the documents' own
+                   minimum and unreadable. Splitting is only offered from the
+                   docked sidebar, so a phone never opens one — but a desktop
+                   window narrowed with a split already open used to land
+                   exactly there. Below the width where two columns still read,
+                   the panes stack instead. */
+                <ResizablePanelGroup
+                  orientation={splitStacks ? "vertical" : "horizontal"}
+                  className="h-full"
+                >
                   {paneLayout.panes.map((pane, index) => {
                     const paneFile = files.find((f) => f.id === pane.activeTabId) ?? null;
                     const paneKind = paneFile
@@ -2979,6 +3021,7 @@ flowchart LR
                                   workspaceRevision={workspaceRevision}
                                   workspaceName={workspaceNameRef.current}
                                   onContentChange={handleContentChange}
+                                  onRenameFile={renameFile}
                                   onAddHighlight={addHighlight}
                                   onUpdateHighlight={updateHighlight}
                                   onRemoveHighlight={removeHighlight}
@@ -2987,8 +3030,30 @@ flowchart LR
                                   onRemoveSaved={removeSaved}
                                   onOpenArtifact={openEmbeddedArtifact}
                                   readingMode={readingMode}
-                                  startInEditFileId={autoEditFileId}
+                                  // An edit request belongs to the column the
+                                  // reader is working in, not to every column
+                                  // showing that document. `revealInPane` has
+                                  // already moved focus to the pane holding the
+                                  // file, so this is that pane — and the same
+                                  // document deliberately opened side by side
+                                  // with itself no longer drops both copies
+                                  // into the editor at once.
+                                  startInEditFileId={
+                                    pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
+                                  }
                                   onStartInEditConsumed={consumeStartInEdit}
+                                  // Only the pane showing the document a jump
+                                  // names is told about it.
+                                  activeSubtopicId={
+                                    paneFile.id === activeFileId ? activeHeadingId : null
+                                  }
+                                  highlightQuery={
+                                    paneFile.id === activeFileId ? highlightQuery : null
+                                  }
+                                  pendingSearch={
+                                    pendingSearch?.fileId === paneFile.id ? pendingSearch : null
+                                  }
+                                  onSearchShown={clearPendingSearch}
                                 />
                               ) : (
                                 <p className="px-2 py-16 text-center text-sm text-muted-foreground">
@@ -3033,7 +3098,10 @@ flowchart LR
                   onRemoveSaved={removeSaved}
                   pendingSaved={pendingSaved?.fileId === activeFile.id ? pendingSaved : null}
                   onSavedShown={clearPendingSaved}
+                  pendingSearch={pendingSearch?.fileId === activeFile.id ? pendingSearch : null}
+                  onSearchShown={clearPendingSearch}
                   onHome={goHome}
+                  onRenameFile={renameActiveFile}
                   onShareFile={shareActiveFile}
                   onAskAi={aiEnabled ? askAiFromSelection : undefined}
                   readingMode={readingMode}
@@ -3159,7 +3227,7 @@ function Header({
         {!hideMenu && (
           <button
             onClick={() => onMenu?.()}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-transform hover:bg-accent active:scale-90 lg:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md transition-transform hover:bg-accent active:scale-90 coarse:h-11 coarse:w-11 lg:hidden"
             aria-label="Menu"
           >
             <Menu className="h-4 w-4" />
@@ -3177,7 +3245,7 @@ function Header({
         )}
         <button
           onClick={onHome}
-          className="flex h-10 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-10 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:text-foreground coarse:h-11"
           aria-label="Home"
           title="Home"
         >
@@ -3209,7 +3277,7 @@ function Header({
         {hasFiles && (
           <button
             onClick={onOpenPalette}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 lg:hidden"
             aria-label="Search"
           >
             <Search className="h-4 w-4" />
@@ -3245,7 +3313,7 @@ function Header({
         {onOpenSettings && (
           <button
             onClick={() => onOpenSettings()}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
             aria-label="Settings"
             title="Settings"
           >

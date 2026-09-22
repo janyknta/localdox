@@ -50,7 +50,7 @@ export function WorkspaceSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex h-10 min-w-10 items-center justify-center rounded-md border border-border bg-background px-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="inline-flex h-10 min-w-10 items-center justify-center rounded-md border border-border bg-background px-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:min-w-11"
         title="Workspaces"
         aria-label="Workspaces"
       >

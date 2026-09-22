@@ -150,6 +150,19 @@ interface Props {
    */
   pendingSaved?: SavedItem | null;
   onSavedShown?: () => void;
+  /**
+   * A search hit the reader just opened from the palette: the line it matched,
+   * and the query that found it. Scroll to that passage and flash it, then call
+   * `onSearchShown` so it isn't replayed on re-render.
+   *
+   * Selecting a hit used to move only as far as the heading above it — and when
+   * the hit's heading id didn't survive per-page rendering (repeated heading
+   * text is slugged against the whole document, but each page is slugged on its
+   * own) not even that far, leaving the reader at the top of the page with the
+   * match somewhere below the fold.
+   */
+  pendingSearch?: { text: string; query: string } | null;
+  onSearchShown?: () => void;
   onHome?: () => void;
   workspaceId?: string | null;
   workspaceRevision?: string;
@@ -159,6 +172,11 @@ interface Props {
   /** Opens the workspace command palette from the header's search field. */
   onOpenPalette?: () => void;
   onRemoveFile?: () => void;
+  /**
+   * Rename the open document, offered as a field above the source while the
+   * editor is open. Omitted where the viewer is read-only.
+   */
+  onRenameFile?: (name: string) => void;
   /** Copy a share link to this one file. Hidden when omitted. */
   onShareFile?: () => void;
   readingMode?: ReadingMode;
@@ -168,6 +186,51 @@ interface Props {
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
+
+/** The element a range starts in, which is what actually scrolls. */
+const elementOf = (range: Range | null) =>
+  range
+    ? ((range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as HTMLElement)
+        : range.startContainer.parentElement) ?? null)
+    : null;
+
+/** How long a jumped-to passage stays lit. */
+const FLASH_MS = 1800;
+
+/**
+ * The CSS Custom Highlight API, as much of it as is needed here and only where
+ * the browser has it. Typed locally because it is still absent from the DOM
+ * lib this project builds against.
+ */
+type HighlightRegistry = Map<string, object> | undefined;
+const highlightRegistry = (): HighlightRegistry =>
+  typeof CSS !== "undefined"
+    ? (CSS as unknown as { highlights?: Map<string, object> }).highlights
+    : undefined;
+
+/**
+ * Flash a passage once, so that arriving somewhere is visible and not merely
+ * true. Shared by the saved-item jump and the search jump.
+ *
+ * A text range gets a one-shot custom highlight, which can span elements; a
+ * heading or an image, which arrive without a range, get the equivalent
+ * class-based pulse.
+ */
+function flashPassage(range: Range | null, target: HTMLElement | null) {
+  const registry = highlightRegistry();
+  const HighlightCtor = (globalThis as { Highlight?: new (...ranges: Range[]) => object })
+    .Highlight;
+  let clear: (() => void) | undefined;
+  if (range && registry && HighlightCtor) {
+    registry.set("dc-saved-flash", new HighlightCtor(range));
+    clear = () => void registry.delete("dc-saved-flash");
+  } else if (target) {
+    target.classList.add("docs-saved-flash");
+    clear = () => target.classList.remove("docs-saved-flash");
+  }
+  if (clear) setTimeout(clear, FLASH_MS);
+}
 
 /**
  * Viewer-specific remark passes, held at module scope so the array identity is
@@ -245,6 +308,8 @@ function MarkdownViewerImpl({
   onRemoveSaved,
   pendingSaved,
   onSavedShown,
+  pendingSearch,
+  onSearchShown,
   onHome,
   workspaceId,
   workspaceRevision,
@@ -253,6 +318,7 @@ function MarkdownViewerImpl({
   onOpenArtifact,
   onOpenPalette,
   onRemoveFile,
+  onRenameFile,
   onShareFile,
   readingMode = "paginated",
   onToggleReadingMode,
@@ -336,10 +402,24 @@ function MarkdownViewerImpl({
     },
     [onContentChange, file.id, file, singleMode, onNav],
   );
-  const enterEditMode = useCallback(() => {
-    originalContentRef.current = file.content;
-    setEditMode(true);
-  }, [file.content]);
+  /**
+   * Snapshot the source Cancel restores, every time the editor opens.
+   *
+   * This used to be captured only on a document switch (and by a header button
+   * that no longer exists), which quietly made Cancel destructive: autosave
+   * writes the draft into `file.content` as you type, so a *second* editing
+   * session on the same document still held the text from when the document
+   * was first opened. Cancelling that session reverted the document past the
+   * work the first session had already saved.
+   *
+   * Read through a ref rather than a dependency so the snapshot is taken on the
+   * transition into the editor and never refreshed by autosave afterwards.
+   */
+  const liveContentRef = useRef(file.content);
+  liveContentRef.current = file.content;
+  useEffect(() => {
+    if (editMode) originalContentRef.current = liveContentRef.current;
+  }, [editMode]);
 
   const exportPDF = useCallback(() => {
     window.print();
@@ -570,20 +650,7 @@ function MarkdownViewerImpl({
               : range.startContainer.parentElement) ?? null)
           : null);
       target?.scrollIntoView({ behavior: "smooth", block: heading ? "start" : "center" });
-
-      // Flash: a text range gets a one-shot CSS highlight, a heading or image
-      // (which have no range) get the equivalent class-based pulse.
-      const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
-        Map<string, any> | undefined;
-      let clear: (() => void) | undefined;
-      if (range && CSSH && typeof (window as any).Highlight !== "undefined") {
-        CSSH.set("dc-saved-flash", new (window as any).Highlight(range));
-        clear = () => CSSH.delete("dc-saved-flash");
-      } else if (target) {
-        target.classList.add("docs-saved-flash");
-        clear = () => target.classList.remove("docs-saved-flash");
-      }
-      if (clear) setTimeout(clear, 1800);
+      flashPassage(range, target);
 
       onSavedShown?.();
     });
@@ -948,6 +1015,39 @@ function MarkdownViewerImpl({
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
 
+  /**
+   * Land on the search hit itself.
+   *
+   * Declared after the two heading scrolls and deferred a frame, so it is the
+   * last word on where the reader ends up: those effects have already moved to
+   * the heading (or given up and gone to the top) by the time this runs, and a
+   * second smooth scroll simply retargets the first.
+   *
+   * Anchored by the matched line, falling back to the query itself — a line may
+   * render differently from its source (markdown syntax is stripped, a match
+   * inside a link or emphasis is split across elements), and the query is the
+   * shortest thing guaranteed to be somewhere in the text.
+   */
+  useEffect(() => {
+    if (!pendingSearch || editMode) return;
+    if (!contentRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const container = contentRef.current;
+      if (!container) return;
+      const range =
+        firstTextRange(container, pendingSearch.text) ??
+        (pendingSearch.query ? firstTextRange(container, pendingSearch.query) : null);
+      const target = elementOf(range);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The same one-shot flash a saved item gets, for the same reason: on a
+      // dense page, arriving is not the same as seeing where you arrived.
+      flashPassage(range, target);
+
+      onSearchShown?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingSearch, editMode, renderContent, fullRender, onSearchShown]);
+
   // Reading progress now lives in <ReadingProgress>, which writes the
   // percentage straight to its own DOM node. It used to be state up here, and
   // because the number changes on nearly every frame of a scroll it re-rendered
@@ -1271,27 +1371,25 @@ function MarkdownViewerImpl({
             </Select>
           )
         }
+        /* Starring lives on the document's own row in the sidebar, and editing
+           lives in that row's menu. What is left here is the one control that
+           changes how this view reads — and when even that does not apply this
+           must be `undefined`, not an empty wrapper, or the header has no way
+           to tell it is empty and reserves its height for nothing. */
         actions={
-          <>
-            {/* Starring lives on the document's own row in the sidebar, and
-                editing lives in that row's menu. What is left here is the one
-                control that changes how this view reads. */}
-            <div className="flex items-center gap-1">
-              {!editMode && onToggleReadingMode && (
-                <button
-                  onClick={onToggleReadingMode}
-                  title={
-                    singleMode
-                      ? "Paged: read one section at a time"
-                      : "Single page: read the whole document"
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Files className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </>
+          !editMode && onToggleReadingMode ? (
+            <button
+              onClick={onToggleReadingMode}
+              title={
+                singleMode
+                  ? "Paged: read one section at a time"
+                  : "Single page: read the whole document"
+              }
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
+            >
+              <Files className="h-4 w-4" />
+            </button>
+          ) : undefined
         }
       />
       <div
@@ -1555,6 +1653,8 @@ function MarkdownViewerImpl({
                 onCancel={cancelEdit}
                 onDirtyChange={setEditorDirty}
                 inspectMissed={inspectMissed}
+                fileName={file.name}
+                onRename={onRenameFile}
               />
             ) : (
               <div
@@ -1758,10 +1858,19 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
       {collapse && (
         <button
           onClick={() => collapse.toggle(finalId)}
-          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 md:flex ${
+          /* The hover-reveal above assumes a pointer that can hover. On a touch
+             tablet — where this is shown, being >=md — there is none, so an
+             expanded section's chevron never appeared and a reader could not
+             collapse anything; only re-expanding worked, because a collapsed
+             one is pinned visible. `coarse:opacity-100` gives touch the same
+             affordance a mouse gets. The ::before pads the 24px target out to
+             44px without moving it: the margin it sits in is narrower than 44px
+             at this breakpoint, so growing the box itself would push it off the
+             side of the screen. */
+          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] md:flex ${
             collapsed
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100"
           }`}
           aria-expanded={!collapsed}
           aria-controls={`${finalId}-section`}
@@ -1860,11 +1969,16 @@ function CodeBlock({ children, ...rest }: any) {
         }}
         aria-label={copied ? "Copied" : "Copy code"}
         /* A hover-only reveal leaves this button unreachable on touch, so
-           `hover-none:opacity-100` pins it there. */
-        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+           `hover-none:opacity-100` pins it there. Being permanently visible is
+           also why it loses its label on a touch device: the word doubled the
+           button's width, and parked over the first line of a code block on a
+           phone that was the difference between covering the end of a line and
+           covering half of it. The tick that replaces the icon still reports
+           the copy, and `aria-label` carries the name either way. */
+        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 coarse:min-h-11 coarse:min-w-11 coarse:justify-center coarse:px-0 [@media(hover:none)]:opacity-100"
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        {copied ? "Copied" : "Copy"}
+        <span className="coarse:hidden">{copied ? "Copied" : "Copy"}</span>
       </button>
       <pre ref={ref} {...rest}>
         {children}
