@@ -51,7 +51,7 @@ import type { Highlight } from "@/lib/dom-highlighter";
 import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
 import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
-import { fileLabel, getDocumentKind } from "@/lib/document-utils";
+import { fileLabel, getDocumentKind, isEditableKind } from "@/lib/document-utils";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useNavHistory } from "@/hooks/use-nav-history";
 
@@ -783,12 +783,7 @@ function SidebarImpl({
               // The file types with an editor behind them. A PDF or a
               // spreadsheet has no edit mode to enter, so the item is absent
               // rather than present and inert.
-              onEdit={
-                onEditFile &&
-                (kind === "markdown" || kind === "mermaid" || kind === "text" || kind === "json")
-                  ? () => onEditFile(file.id)
-                  : undefined
-              }
+              onEdit={onEditFile && isEditableKind(kind) ? () => onEditFile(file.id) : undefined}
               onRename={() => {
                 const newName = window.prompt("Rename file to:", file.name);
                 if (newName && newName !== file.name) {

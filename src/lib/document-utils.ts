@@ -73,6 +73,22 @@ export function isTextKind(kind: DocumentKind) {
   ].includes(kind);
 }
 
+/**
+ * Kinds the app can actually open an editor for.
+ *
+ * Narrower than `isTextKind`, which also covers text the reader can only read:
+ * a CSV is shown as a sheet and a Google link is a pointer at a document that
+ * lives elsewhere, so neither has a source editor to enter. A board is absent
+ * for the opposite reason — its editor is its canvas, not a text field.
+ *
+ * One list, because it was two: the sidebar's "Edit" item used to name the
+ * editable kinds inline, and HTML — which has both a source view and, now, an
+ * editor behind it — was left off that list and out of reach.
+ */
+export function isEditableKind(kind: DocumentKind) {
+  return ["markdown", "mermaid", "text", "json", "html"].includes(kind);
+}
+
 function dataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
