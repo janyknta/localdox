@@ -490,3 +490,44 @@ export function parseMarkdownBlocks(source: string): ExportBlock[] {
 export function runsToText(runs: InlineRun[]): string {
   return runs.map((r) => r.text).join("");
 }
+
+/**
+ * How much width one table column wants, in characters.
+ *
+ * Shared by both writers so a table is proportioned the same in the `.docx` and
+ * the PDF — a reader comparing the two downloads of one document should not
+ * find the columns rearranged between them.
+ *
+ * Two things decide it, and a column needs both:
+ *
+ *  - The longest unbreakable token, because a column narrower than that forces
+ *    a mid-word break however many lines it is given.
+ *  - Some of the total length, because a column of sentences and a column of
+ *    single words can share a longest word and still need very different room.
+ *    Weighted by a square root rather than taken whole: a 60-character note
+ *    should be wider than a 10-character one, but not six times wider, or one
+ *    prose column takes the entire table.
+ *
+ * Both are read at the 90th percentile over the column's cells, so a single
+ * outlier row cannot claim the width that nine ordinary ones need.
+ */
+export function columnWidthDemand(header: InlineRun[], cells: InlineRun[][]): number {
+  const longestWord = (runs: InlineRun[]) =>
+    runsToText(runs)
+      .split(/\s+/)
+      .reduce((max, word) => Math.max(max, word.length), 0);
+
+  const percentile = (values: number[]): number => {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+  };
+
+  const headerText = runsToText(header);
+  const token = Math.max(longestWord(header), percentile(cells.map(longestWord)));
+  const bulk = Math.max(headerText.length, percentile(cells.map((c) => runsToText(c).length)));
+
+  // A header is read on every page of a long table, so it is worth a little
+  // more than a value read once.
+  return Math.max(4, token, headerText.length * 0.9, Math.sqrt(bulk) * 2.2);
+}

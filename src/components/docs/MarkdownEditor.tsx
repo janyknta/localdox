@@ -13,6 +13,8 @@ import type { FormatAction } from "@/lib/markdown-format";
 import { TOOLBAR_ITEMS } from "@/lib/markdown-toolbar-items";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 
+const AUTOSAVE_MS = 600;
+
 /**
  * The markdown source editor.
  *

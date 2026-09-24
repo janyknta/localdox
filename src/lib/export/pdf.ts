@@ -118,20 +118,12 @@ const LANDSCAPE_THRESHOLD = 7;
 function tableHtml(block: Extract<ExportBlock, { type: "table" }>): string {
   const columns = Math.max(1, block.header.length);
 
-  const longestWord = (runs: InlineRun[]) =>
-    runsToText(runs)
-      .split(/\s+/)
-      .reduce((max, word) => Math.max(max, word.length), 0);
-
-  // The 90th percentile rather than the maximum, so one outlier cell does not
-  // take the whole table's width from the columns around it.
-  const demands = block.header.map((cell, index) => {
-    const lengths = block.rows.map((row) => longestWord(row[index] ?? [])).sort((a, b) => a - b);
-    const percentile = lengths.length
-      ? lengths[Math.min(lengths.length - 1, Math.floor(lengths.length * 0.9))]
-      : 0;
-    return Math.max(4, longestWord(cell) * 1.2, percentile);
-  });
+  const demands = block.header.map((cell, index) =>
+    columnWidthDemand(
+      cell,
+      block.rows.map((row) => row[index] ?? []),
+    ),
+  );
   const total = demands.reduce((sum, demand) => sum + demand, 0) || columns;
   const widths = demands.map((demand) =>
     Math.min(40, Math.max(100 / columns / 2, (demand / total) * 100)),
@@ -271,16 +263,61 @@ blockquote > :last-child { margin-bottom: 0; }
 hr { border: none; border-top: 1px solid #d4d2cc; margin: 1.6em 0; }
 table {
   width: 100%;
+  /* Honour the colgroup widths. Under the default 'auto', the browser
+     re-measures the content and undoes the proportional sizing entirely. */
+  table-layout: fixed;
   border-collapse: collapse;
   margin: 0 0 1.2em;
   font-size: 0.9em;
-  break-inside: avoid;
-  page-break-inside: avoid;
 }
+/* A long table must be allowed to break: 'break-inside: avoid' on a table
+   taller than the page makes the browser push the whole thing to the next page
+   and overflow it anyway, losing the rows past the fold. Rows are kept whole
+   instead, which is the part that actually matters to a reader. */
 thead { display: table-header-group; }
 tr { break-inside: avoid; page-break-inside: avoid; }
-th, td { border: 1px solid #d4d2cc; padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+th, td {
+  border: 1px solid #d4d2cc;
+  padding: 0.4em 0.55em;
+  text-align: left;
+  vertical-align: top;
+  /* Long unbroken tokens — a URL, an id — would otherwise push a fixed-layout
+     column past its share and skew every other column on the row. */
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
+}
 th { background: #f1f1ef; font-weight: 600; }
+table.compact { font-size: 0.78em; }
+table.compact th, table.compact td { padding: 0.3em 0.4em; }
+table.dense { font-size: 0.68em; }
+table.dense th, table.dense td { padding: 0.22em 0.3em; }
+
+/* A table too wide for the column gets the page turned under it.
+   Page orientation cannot vary per element in any browser, so the table is
+   rotated a quarter turn inside a box the size of the page instead - which is
+   also what survives "Save as PDF", where a real orientation change would not. */
+.landscape {
+  break-before: page;
+  page-break-before: always;
+  break-after: page;
+  page-break-after: always;
+  break-inside: avoid;
+  page-break-inside: avoid;
+  height: 244mm;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.landscape-inner {
+  transform: rotate(-90deg);
+  /* The rotated box swaps the page's axes: its width is the page's usable
+     height and vice versa. */
+  width: 244mm;
+  max-height: 178mm;
+}
+.landscape-inner table { margin: 0; }
 figure { margin: 1.2em 0; text-align: center; break-inside: avoid; page-break-inside: avoid; }
 figure img { max-width: 100%; height: auto; }
 figcaption { font-size: 0.85em; color: #6b6a62; margin-top: 0.4em; }
