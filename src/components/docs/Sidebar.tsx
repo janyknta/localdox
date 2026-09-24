@@ -49,10 +49,9 @@ import type { LucideIcon } from "lucide-react";
 import { splitIntoSubtopics } from "@/lib/markdown-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-items";
-import { BIN_RETENTION_MS } from "@/lib/persistence";
 import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
-import { fileLabel, getDocumentKind, isTextKind } from "@/lib/document-utils";
+import { fileLabel, getDocumentKind, isEditableKind } from "@/lib/document-utils";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useNavHistory } from "@/hooks/use-nav-history";
 
@@ -122,9 +121,6 @@ function savedByFile(items: SavedEntry[]): Array<[string, SavedEntry[]]> {
 export type SidebarView = {
   sort: "manual" | "name" | "date";
   dir: "asc" | "desc";
-  // The Bin used to be a fourth mode here. It lives in Settings ▸ Storage now,
-  // which already had the complete panel — restore, delete-for-good, empty, and
-  // the retention countdown — so the sidebar was the second, thinner copy.
   mode: "all" | "grouped" | "saved";
 };
 export const DEFAULT_VIEW: SidebarView = {
@@ -133,7 +129,13 @@ export const DEFAULT_VIEW: SidebarView = {
   mode: "all",
 };
 
-/** The list's three views, in the order the picker offers them. */
+/**
+ * The list's three views, in the order the picker offers them.
+ *
+ * The Bin is not among them. It is not a way of looking at the workspace —
+ * it holds documents that have left it — and it lives in Settings ▸ Storage,
+ * beside the quota it is actually competing for.
+ */
 const VIEW_MODES: readonly SidebarView["mode"][] = ["all", "grouped", "saved"];
 const VIEW_LABEL: Record<SidebarView["mode"], string> = {
   all: "All files",
@@ -189,8 +191,6 @@ interface Props {
   onCreateFolder?: (name: string, parentId?: string | null) => void;
   /** Re-parent a folder. `null` puts it back at the top level. */
   onMoveFolderToFolder?: (folderId: string, parentId: string | null) => void;
-  // Restoring and deleting-for-good moved to Settings ▸ Storage along with the
-  // Bin view itself, so the sidebar no longer takes those callbacks.
   onRenameFolder?: (id: string, name: string) => void;
   /** Deleting a folder keeps its documents — they return to the top level. */
   onDeleteFolder?: (id: string) => void;
@@ -392,8 +392,8 @@ function SidebarImpl({
 
   const total = files.length;
 
-  // Binned documents are out of the list entirely — they live in Settings ▸
-  // Storage until they are restored or purged.
+  // Binned documents are out of the list entirely — they wait in Settings ▸
+  // Storage ▸ Bin until they are restored or purged.
   const activeFiles = files.filter((f) => !f.isArchived && !f.deletedAt);
 
   // Multi-select shortcuts. Read through a ref so the listener isn't torn down
@@ -583,7 +583,7 @@ function SidebarImpl({
         >
           <button
             onClick={() => toggleFolder(folder.id)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left coarse:min-h-11"
             aria-expanded={!collapsed}
           >
             <ChevronRight
@@ -756,7 +756,7 @@ function SidebarImpl({
               if (selecting) toggleSelection(file.id);
               else onSelect(file.id);
             }}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pl-2 pr-1.5 text-left coarse:min-h-11"
             aria-current={current ? "page" : undefined}
           >
             {!selecting && (
@@ -783,13 +783,7 @@ function SidebarImpl({
               // The file types with an editor behind them. A PDF or a
               // spreadsheet has no edit mode to enter, so the item is absent
               // rather than present and inert.
-              //
-              // `isTextKind` is the same predicate the import path uses to
-              // decide which documents are stored as editable text, so it is
-              // what decides who may edit one. Spelling the list out a second
-              // time here is what left HTML, CSV, and the Google kinds stored
-              // as text but with no way to open their editor.
-              onEdit={onEditFile && isTextKind(kind) ? () => onEditFile(file.id) : undefined}
+              onEdit={onEditFile && isEditableKind(kind) ? () => onEditFile(file.id) : undefined}
               onRename={() => {
                 const newName = window.prompt("Rename file to:", file.name);
                 if (newName && newName !== file.name) {
@@ -865,7 +859,7 @@ function SidebarImpl({
             {onOpenPalette && (
               <button
                 onClick={onOpenPalette}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                 aria-label="Search docs"
                 title="Search docs"
               >
@@ -875,7 +869,7 @@ function SidebarImpl({
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
                 aria-label="Toggle sidebar"
                 title="Toggle sidebar"
               >
@@ -893,7 +887,7 @@ function SidebarImpl({
               disabled={!navHistory.canBack}
               aria-label={navHistory.backLabel}
               title={navHistory.backLabel}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 disabled:pointer-events-none disabled:opacity-40"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
@@ -902,7 +896,7 @@ function SidebarImpl({
               disabled={!navHistory.canForward}
               aria-label={navHistory.forwardLabel}
               title={navHistory.forwardLabel}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11 disabled:pointer-events-none disabled:opacity-40"
             >
               <ArrowRight className="h-4 w-4" />
             </button>
@@ -920,7 +914,7 @@ function SidebarImpl({
             <button
               onClick={() => setViewMenuOpen((o) => !o)}
               aria-expanded={viewMenuOpen}
-              className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+              className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-1 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground coarse:min-h-11"
             >
               <span className="truncate">{VIEW_LABEL[view.mode]}</span>
               <ChevronRight
@@ -1064,7 +1058,7 @@ function SidebarImpl({
         {onOpenSavedPage && (
           <button
             onClick={onOpenSavedPage}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground coarse:min-h-11"
           >
             <Star className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
             <span className="min-w-0 flex-1 truncate">Saved</span>
@@ -1292,7 +1286,12 @@ function FileMenu({
           e.stopPropagation();
           setOpen((o) => !o);
         }}
-        className={`flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground ${open ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"}`}
+        /* From `md` up this reveals on hover, which on a touch tablet means it
+           never reveals at all — every per-file action (edit, rename, share,
+           remove) was unreachable there. `coarse:opacity-100` restores it, and
+           the ::before pads the 24px glyph to a 44px target; growing the button
+           itself would have re-flowed every row in the tree. */
+        className={`relative flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] ${open ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100 coarse:opacity-100"}`}
         aria-label="Options"
       >
         <MoreVertical className="h-4 w-4" />
@@ -1721,7 +1720,7 @@ export function AddMenu({
         title="Add to workspace"
         className={
           buttonClassName ??
-          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
         }
       >
         <Plus className="h-4 w-4" />

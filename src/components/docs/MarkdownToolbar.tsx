@@ -48,9 +48,12 @@ export function MarkdownToolbar({ onAction }: { onAction: (action: FormatAction)
               // action ever ran.
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => onAction(action)}
-              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              // 28px is a comfortable mouse target and a poor thumb one. The
+              // row already scrolls rather than wraps, so widening these on a
+              // touch device costs nothing but a little more scrolling.
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring coarse:h-11 coarse:w-11"
             >
-              <Icon className="h-3.5 w-3.5" />
+              <Icon className="h-3.5 w-3.5 coarse:h-4.5 coarse:w-4.5" />
             </button>
           ))}
         </div>

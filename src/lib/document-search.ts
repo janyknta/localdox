@@ -11,6 +11,16 @@ export interface SearchHit {
   headingId?: string;
   headingText?: string;
   snippet: string;
+  /**
+   * The matched line in full, untruncated.
+   *
+   * `snippet` is clipped with ellipses for display, which makes it useless for
+   * finding the match again in the rendered document. The reader asked to be
+   * taken to *this line*; scrolling to the heading above it was as close as the
+   * viewer could get, and when the heading's slug didn't survive per-page
+   * rendering it fell back to the top of the page instead.
+   */
+  line: string;
   score: number;
 }
 interface SearchRow {
@@ -87,7 +97,7 @@ export class DocumentSearch {
         this.index.set(file.id, indexed);
       }
       if (file.name.toLowerCase().includes(q))
-        add({ fileId: file.id, fileName: file.name, snippet: file.name, score: 80 });
+        add({ fileId: file.id, fileName: file.name, snippet: file.name, line: "", score: 80 });
       let count = 0;
       for (const row of indexed.rows) {
         if (++count % 256 === 0) yield;
@@ -103,6 +113,7 @@ export class DocumentSearch {
           snippet: row.heading
             ? row.text
             : (start ? "…" : "") + row.text.slice(start, end) + (end < row.text.length ? "…" : ""),
+          line: row.text,
           score: row.heading ? 100 + (at === 0 ? 20 : 0) : 50,
         });
       }

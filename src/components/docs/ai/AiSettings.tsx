@@ -133,7 +133,7 @@ function ProviderKeyRow({
           href={provider.keyUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground coarse:min-h-11"
         >
           Get a key <ExternalLink className="h-3 w-3" />
         </a>
@@ -151,12 +151,12 @@ function ProviderKeyRow({
             placeholder={saved ? "Key saved" : "Paste API key"}
             autoComplete="off"
             spellCheck={false}
-            className="w-full rounded-md border border-border bg-background py-1.5 pl-2.5 pr-8 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+            className="w-full rounded-md border border-border bg-background py-1.5 pl-2.5 pr-8 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10 coarse:min-h-11 coarse:pr-12"
           />
           <button
             type="button"
             onClick={() => setReveal((r) => !r)}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+            className="absolute right-1.5 top-1/2 inline-flex -translate-y-1/2 items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:text-foreground coarse:size-11"
             aria-label={reveal ? "Hide key" : "Show key"}
           >
             {reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
@@ -168,7 +168,7 @@ function ProviderKeyRow({
           <button
             onClick={onSave}
             disabled={status === "checking"}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50 coarse:min-h-11 coarse:px-4"
           >
             {status === "checking" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {saved ? "Update" : "Save"}
@@ -217,11 +217,10 @@ function DefaultModel({
             onChange={(e) => {
               const model = e.target.value;
               const provider = allOptions.find((o) => o.model.id === model)?.provider.id as
-                | ProviderId
-                | undefined;
+                ProviderId | undefined;
               onChange({ defaultModel: model, ...(provider ? { defaultProvider: provider } : {}) });
             }}
-            className="min-w-0 max-w-[60%] rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+            className="min-w-0 max-w-[60%] rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10 coarse:min-h-11"
           >
             {PROVIDER_LIST.map((provider) => {
               const isConnected = connected.includes(provider.id);

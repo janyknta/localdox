@@ -9,7 +9,7 @@ interface Props {
   files: MdFile[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSelect: (fileId: string, headingId?: string, query?: string) => void;
+  onSelect: (fileId: string, headingId?: string, query?: string, matchedLine?: string) => void;
 }
 
 const RECENT_KEY = "docs-recent-searches";
@@ -53,7 +53,9 @@ export function CommandPalette({ files, open, onOpenChange, onSelect }: Props) {
         /* Keep search usable when browser storage is unavailable. */
       }
     }
-    onSelect(hit.fileId, hit.headingId, q);
+    // The matched line travels with the jump so the viewer can land on the
+    // passage itself rather than on the heading that happens to precede it.
+    onSelect(hit.fileId, hit.headingId, q, hit.line);
     onOpenChange(false);
   };
 

@@ -39,6 +39,7 @@ export function PaneDocument({
   workspaceRevision,
   workspaceName,
   onContentChange,
+  onRenameFile,
   onAddHighlight,
   onUpdateHighlight,
   onRemoveHighlight,
@@ -50,6 +51,10 @@ export function PaneDocument({
   mathPreferences,
   startInEditFileId,
   onStartInEditConsumed,
+  activeSubtopicId = null,
+  highlightQuery = null,
+  pendingSearch = null,
+  onSearchShown,
 }: {
   file: MdFile;
   files: MdFile[];
@@ -59,6 +64,7 @@ export function PaneDocument({
   workspaceRevision: string;
   workspaceName: string;
   onContentChange: (fileId: string, content: string) => void;
+  onRenameFile: (fileId: string, name: string) => void;
   onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">, fileId: string) => void;
   onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
   onRemoveHighlight: (id: string) => void;
@@ -70,6 +76,21 @@ export function PaneDocument({
   mathPreferences?: MathPreferences;
   startInEditFileId?: string | null;
   onStartInEditConsumed?: () => void;
+  /**
+   * Where a jump from search or the sidebar is pointing, passed down only for
+   * the pane holding the document it names — the parent gates these, because a
+   * heading id or a matched line means nothing to the other columns.
+   *
+   * These used to be hard-coded to `null` here, on the reasoning that paging
+   * belongs to the single-document reader. But a search hit is not paging: it
+   * is a request to be taken to one passage, and in a split it was silently
+   * dropped, so opening a hit put the document on screen and left the reader to
+   * find the line themselves.
+   */
+  activeSubtopicId?: string | null;
+  highlightQuery?: string | null;
+  pendingSearch?: { text: string; query: string } | null;
+  onSearchShown?: () => void;
 }) {
   const fileHighlights = useMemo(() => {
     const mine = highlights.filter((hl) => hl.fileId === file.id);
@@ -88,6 +109,10 @@ export function PaneDocument({
   const toggleSaved = useCallback(
     (draft: SavedDraft) => onToggleSaved(file.id, draft),
     [onToggleSaved, file.id],
+  );
+  const renameFile = useCallback(
+    (name: string) => onRenameFile(file.id, name),
+    [onRenameFile, file.id],
   );
 
   // A split is a layout concern, not a document-type mode. Resolve the viewer
@@ -124,9 +149,12 @@ export function PaneDocument({
       // Paging between documents belongs to the single-document reader. In a
       // split, the tab strip is how you move between them.
       onNav={() => {}}
-      activeSubtopicId={null}
-      highlightQuery={null}
+      activeSubtopicId={activeSubtopicId}
+      highlightQuery={highlightQuery}
+      pendingSearch={pendingSearch}
+      onSearchShown={onSearchShown}
       onContentChange={onContentChange}
+      onRenameFile={renameFile}
       startInEditFileId={startInEditFileId}
       onStartInEditConsumed={onStartInEditConsumed}
       nextReadingMin={null}

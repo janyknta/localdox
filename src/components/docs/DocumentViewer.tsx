@@ -240,6 +240,9 @@ function BoardFileViewer({ file, onContentChange, fillAvailableHeight }: Props) 
   );
 }
 
+/** How long typing has to pause before an HTML draft is handed to the parent. */
+const HTML_AUTOSAVE_MS = 600;
+
 /**
  * A standalone `.html` / `.htm` document, rendered rather than described.
  *
@@ -253,6 +256,13 @@ function BoardFileViewer({ file, onContentChange, fillAvailableHeight }: Props) 
  *
  * The source toggle is offered because a blocked-script page can look
  * misleadingly empty; seeing the markup explains why.
+ *
+ * The markup is also editable. An `.html` file is text the reader owns, the
+ * same as a `.md` one, and it was the odd case out: the sidebar's "Edit" item
+ * was simply absent for it, so a document you could read and whose source you
+ * could stare at was the one document you could not change. Editing writes
+ * through the same autosave path every other text document uses, and the
+ * preview re-renders from the draft as soon as it lands.
  */
 function HtmlFileViewer({
   file,
@@ -271,11 +281,18 @@ function HtmlFileViewer({
   const [showSource, setShowSource] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(file.content);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(file.content);
+
+  // The source Cancel puts back. Captured when the editor opens, not when the
+  // document does: autosave has been writing the draft into `file.content`, so
+  // a snapshot taken at open time would revert past an earlier session's work.
+  const originalRef = useRef(file.content);
 
   // A new document starts in preview rather than inheriting the previous file's
   // mode — the toggle describes how you are reading *this* page. The draft is
-  // re-seeded per document rather than per content change, so a content echo
-  // from the parent doesn't clobber what's been typed since.
+  // re-seeded per document, not per content change, so the parent echoing an
+  // autosave back doesn't clobber what has been typed since.
   useEffect(() => {
     setShowSource(false);
     setEditing(false);
@@ -283,37 +300,45 @@ function HtmlFileViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id]);
 
-  // Nothing is written until Done, matching the markdown and JSON editors.
-  const commitEdit = () => {
-    if (draft !== file.content) onContentChange?.(file.id, draft);
-    setEditing(false);
-  };
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
 
-  // Discard: the draft was never written, so dropping it is the whole job.
-  const cancelEdit = () => {
-    setDraft(file.content);
-    setEditing(false);
-  };
-
-  // "Edit" from the file's sidebar menu — the same channel every other kind
-  // receives the request on.
+  // Autosave, matching the markdown and JSON editors.
   useEffect(() => {
-    if (startInEditFileId !== file.id || editing) return;
+    if (!editing || draft === file.content) return;
+    const timer = setTimeout(() => onContentChangeRef.current?.(file.id, draft), HTML_AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [draft, editing, file.content, file.id]);
+
+  const beginEdit = () => {
+    originalRef.current = file.content;
     setDraft(file.content);
     setEditing(true);
+  };
+
+  const doneEdit = () => setEditing(false);
+
+  const cancelEdit = () => {
+    setDraft(originalRef.current);
+    onContentChange?.(file.id, originalRef.current);
+    setEditing(false);
+  };
+
+  // "Edit" from the file's sidebar menu, the same channel the other editors
+  // are opened through.
+  useEffect(() => {
+    if (startInEditFileId !== file.id || editing) return;
+    beginEdit();
     onStartInEditConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startInEditFileId, file.id]);
 
-  useNavEscape(
-    editing,
-    () => {
-      if (draft !== file.content && !window.confirm(DISCARD_PROMPT)) return;
-      cancelEdit();
-    },
-    ESCAPE_DEPTH.mode,
-  );
+  useNavEscape(editing, cancelEdit, ESCAPE_DEPTH.mode);
   useNavEscape(!editing && showSource, () => setShowSource(false), ESCAPE_DEPTH.mode);
+
+  // While editing, the preview follows the draft rather than the last saved
+  // content, so the frame is a live answer to what has just been typed.
+  const previewSource = editing ? draft : file.content;
 
   return (
     <ViewerFrame
@@ -326,6 +351,26 @@ function HtmlFileViewer({
       onOpenPalette={onOpenPalette}
       action={
         editing ? (
+          // The editing session's own controls, the way the JSON editor does
+          // it. Entering the editor stays a file action in the sidebar menu.
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="flex h-8 items-center rounded-md border border-border px-2.5 text-xs font-medium text-foreground hover:bg-accent"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={doneEdit}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-foreground px-2.5 text-xs font-medium text-background hover:opacity-90"
+            >
+              <Eye className="h-3.5 w-3.5" /> Done · Preview
+            </button>
+          </div>
+        ) : (
+          editing ? (
           <div className="flex items-center gap-1.5">
             <button
               type="button"
@@ -345,35 +390,50 @@ function HtmlFileViewer({
           </div>
         ) : (
           <button
-            type="button"
-            onClick={() => setShowSource((on) => !on)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-pressed={showSource}
-          >
-            {showSource ? (
-              <>
-                <Eye className="h-3.5 w-3.5" /> Preview
-              </>
-            ) : (
-              <>
-                <Code2 className="h-3.5 w-3.5" /> Source
-              </>
-            )}
-          </button>
+              type="button"
+              onClick={() => setShowSource((on) => !on)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              aria-pressed={showSource}
+            >
+              {showSource ? (
+                <>
+                  <Eye className="h-3.5 w-3.5" /> Preview
+                </>
+              ) : (
+                <>
+                  <Code2 className="h-3.5 w-3.5" /> Source
+                </>
+              )}
+            </button>
+        )
         )
       }
     >
       {editing ? (
-        <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
-          <p className="mb-2 text-xs text-muted-foreground">
-            Editing — Done saves, Cancel discards
-          </p>
+        <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
-            className="min-h-[70vh] w-full resize-y rounded-lg border border-border bg-muted/30 p-4 font-mono text-xs leading-relaxed outline-none focus:border-primary/50"
+            aria-label="Edit HTML source"
+            className="h-[calc(100dvh-16rem)] w-full resize-none rounded-xl border border-border bg-[#101722] p-4 font-mono text-sm leading-6 text-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
           />
+          <p className="mt-2 text-xs text-muted-foreground">
+            Editing the page source — changes save automatically.
+          </p>
+          {/* The live result, kept alongside the markup rather than behind a
+              toggle: an HTML edit is only meaningful next to what it renders. */}
+          <div className="mt-4 overflow-hidden rounded-xl border border-border">
+            <div className="border-b border-border bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground">
+              Preview
+            </div>
+            <iframe
+              title={`${file.name} preview`}
+              srcDoc={previewSource}
+              sandbox=""
+              className="h-[45dvh] w-full border-0 bg-white"
+            />
+          </div>
         </div>
       ) : showSource ? (
         <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
@@ -384,7 +444,7 @@ function HtmlFileViewer({
       ) : (
         <iframe
           title={file.name}
-          srcDoc={file.content}
+          srcDoc={previewSource}
           sandbox=""
           className="h-[calc(100dvh-7.5rem)] w-full border-0 bg-white"
         />

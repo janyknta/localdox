@@ -99,7 +99,7 @@ export function IconButton({
       disabled={disabled}
       aria-label={label}
       title={title ?? label}
-      className={`rounded-md p-2 text-muted-foreground transition-colors disabled:pointer-events-none disabled:opacity-30 ${
+      className={`inline-flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors disabled:pointer-events-none disabled:opacity-30 coarse:size-11 ${
         danger
           ? "hover:bg-destructive/10 hover:text-destructive"
           : "hover:bg-accent hover:text-foreground"

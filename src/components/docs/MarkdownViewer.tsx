@@ -103,12 +103,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ViewerHeader, ViewerPager } from "./ViewerHeader";
 import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
-import { DISCARD_PROMPT } from "@/lib/document-utils";
-import { MathProvider } from "./math/MathContext";
-import { MATH_COMPONENTS } from "./math/components";
-import { MATH_ELEMENT } from "@/lib/math/remark-math-nodes";
-import { buildEquationRegistry } from "@/lib/math/equation-registry";
-import { DEFAULT_MATH_PREFERENCES, type MathPreferences } from "@/lib/math/types";
 
 interface Props {
   file: MdFile;
@@ -156,6 +150,19 @@ interface Props {
    */
   pendingSaved?: SavedItem | null;
   onSavedShown?: () => void;
+  /**
+   * A search hit the reader just opened from the palette: the line it matched,
+   * and the query that found it. Scroll to that passage and flash it, then call
+   * `onSearchShown` so it isn't replayed on re-render.
+   *
+   * Selecting a hit used to move only as far as the heading above it — and when
+   * the hit's heading id didn't survive per-page rendering (repeated heading
+   * text is slugged against the whole document, but each page is slugged on its
+   * own) not even that far, leaving the reader at the top of the page with the
+   * match somewhere below the fold.
+   */
+  pendingSearch?: { text: string; query: string } | null;
+  onSearchShown?: () => void;
   onHome?: () => void;
   workspaceId?: string | null;
   workspaceRevision?: string;
@@ -165,20 +172,65 @@ interface Props {
   /** Opens the workspace command palette from the header's search field. */
   onOpenPalette?: () => void;
   onRemoveFile?: () => void;
+  /**
+   * Rename the open document, offered as a field above the source while the
+   * editor is open. Omitted where the viewer is read-only.
+   */
+  onRenameFile?: (name: string) => void;
   /** Copy a share link to this one file. Hidden when omitted. */
   onShareFile?: () => void;
   readingMode?: ReadingMode;
   onToggleReadingMode?: () => void;
   /** Open the Ask AI panel prefilled from the current selection. */
   onAskAi?: (prefill: { selection: string; actionId?: string }) => void;
-  /**
-   * How math is typeset, from the reader's preferences. Omitted means the
-   * defaults — KaTeX with a MathJax fallback, equations numbered.
-   */
-  mathPreferences?: MathPreferences;
 }
 
 const stripExt = (name: string) => name.replace(/\.(md|markdown|mdx|txt)$/i, "");
+
+/** The element a range starts in, which is what actually scrolls. */
+const elementOf = (range: Range | null) =>
+  range
+    ? ((range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? (range.startContainer as HTMLElement)
+        : range.startContainer.parentElement) ?? null)
+    : null;
+
+/** How long a jumped-to passage stays lit. */
+const FLASH_MS = 1800;
+
+/**
+ * The CSS Custom Highlight API, as much of it as is needed here and only where
+ * the browser has it. Typed locally because it is still absent from the DOM
+ * lib this project builds against.
+ */
+type HighlightRegistry = Map<string, object> | undefined;
+const highlightRegistry = (): HighlightRegistry =>
+  typeof CSS !== "undefined"
+    ? (CSS as unknown as { highlights?: Map<string, object> }).highlights
+    : undefined;
+
+/**
+ * Flash a passage once, so that arriving somewhere is visible and not merely
+ * true. Shared by the saved-item jump and the search jump.
+ *
+ * A text range gets a one-shot custom highlight, which can span elements; a
+ * heading or an image, which arrive without a range, get the equivalent
+ * class-based pulse.
+ */
+function flashPassage(range: Range | null, target: HTMLElement | null) {
+  const registry = highlightRegistry();
+  const HighlightCtor = (globalThis as { Highlight?: new (...ranges: Range[]) => object })
+    .Highlight;
+  let clear: (() => void) | undefined;
+  if (range && registry && HighlightCtor) {
+    registry.set("dc-saved-flash", new HighlightCtor(range));
+    clear = () => void registry.delete("dc-saved-flash");
+  } else if (target) {
+    target.classList.add("docs-saved-flash");
+    clear = () => target.classList.remove("docs-saved-flash");
+  }
+  if (clear) setTimeout(clear, FLASH_MS);
+}
 
 /**
  * Viewer-specific remark passes, held at module scope so the array identity is
@@ -256,6 +308,8 @@ function MarkdownViewerImpl({
   onRemoveSaved,
   pendingSaved,
   onSavedShown,
+  pendingSearch,
+  onSearchShown,
   onHome,
   workspaceId,
   workspaceRevision,
@@ -264,11 +318,11 @@ function MarkdownViewerImpl({
   onOpenArtifact,
   onOpenPalette,
   onRemoveFile,
+  onRenameFile,
   onShareFile,
   readingMode = "paginated",
   onToggleReadingMode,
   onAskAi,
-  mathPreferences = DEFAULT_MATH_PREFERENCES,
 }: Props) {
   const singleMode = readingMode === "single";
   const containerRef = useRef<HTMLDivElement>(null);
@@ -277,16 +331,16 @@ function MarkdownViewerImpl({
   // editor opened with is kept here, so Cancel can put it back.
   const originalContentRef = useRef(file.content);
 
-  // Done: commit the draft, then leave.
-  //
   // The editor hands back the id of the document the text was typed into. It is
-  // not necessarily `file.id`: a commit can arrive while the reader is
-  // switching files, and routing it by the now-current file would overwrite the
-  // document they just opened with the draft from the one they left. `content`
-  // is undefined when nothing was changed, and then nothing is written.
+  // not necessarily `file.id`: a save can arrive while the reader is switching
+  // files, and routing it by the now-current file would overwrite the document
+  // they just opened with the draft from the one they left.
+  const saveDraft = useCallback(
+    (fileId: string, content: string) => onContentChange(fileId, content),
+    [onContentChange],
+  );
   const leaveEditMode = useCallback(
-    (fileId: string, content: string | undefined, cursorIndex?: number) => {
-      if (content !== undefined) onContentChange(fileId, content);
+    (cursorIndex?: number) => {
       setEditMode(false);
       if (cursorIndex !== undefined) {
         const chunks = fileSubtopics(file);
@@ -314,46 +368,58 @@ function MarkdownViewerImpl({
         }
       }
     },
-    [file, singleMode, onNav, onContentChange],
+    [file, singleMode, onNav],
   );
-  // Cancel: the draft is discarded inside the editor and was never written, so
-  // there is nothing here to roll back.
-  //
-  // Cancel only scrolls; it must never navigate. Resolving the caret to a
-  // section and calling `onNav` moved the reader into that one section's view,
-  // which reads as the rest of the document having been thrown away along with
-  // the draft. Done still navigates — after a write, landing on the section you
-  // were editing is the useful place to be — but an abandoned edit should put
-  // the document back exactly as it was found.
   const cancelEdit = useCallback(
     (cursorIndex?: number) => {
+      onContentChange(file.id, originalContentRef.current);
       setEditMode(false);
-      if (cursorIndex === undefined) return;
-      const chunks = fileSubtopics(file);
-      if (chunks.length === 0) return;
-      let currentLength = 0;
-      let targetChunk = chunks[0];
-      for (const chunk of chunks) {
-        if (cursorIndex >= currentLength && cursorIndex <= currentLength + chunk.content.length) {
-          targetChunk = chunk;
-          break;
+      if (cursorIndex !== undefined) {
+        const chunks = fileSubtopics(file);
+        if (chunks.length > 0) {
+          let currentLength = 0;
+          let targetChunk = chunks[0];
+          for (const chunk of chunks) {
+            if (
+              cursorIndex >= currentLength &&
+              cursorIndex <= currentLength + chunk.content.length
+            ) {
+              targetChunk = chunk;
+              break;
+            }
+            currentLength += chunk.content.length + 1;
+          }
+          if (singleMode) {
+            setTimeout(() => {
+              const el = document.getElementById(targetChunk.id);
+              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 100);
+          } else {
+            onNav(file.id, targetChunk.id);
+          }
         }
-        currentLength += chunk.content.length + 1;
       }
-      // Chunked mode is already showing whichever section the reader opened the
-      // editor from, so there is nothing to move there either.
-      if (!singleMode) return;
-      setTimeout(() => {
-        const el = document.getElementById(targetChunk.id);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 100);
     },
-    [file, singleMode],
+    [onContentChange, file.id, file, singleMode, onNav],
   );
-  const enterEditMode = useCallback(() => {
-    originalContentRef.current = file.content;
-    setEditMode(true);
-  }, [file.content]);
+  /**
+   * Snapshot the source Cancel restores, every time the editor opens.
+   *
+   * This used to be captured only on a document switch (and by a header button
+   * that no longer exists), which quietly made Cancel destructive: autosave
+   * writes the draft into `file.content` as you type, so a *second* editing
+   * session on the same document still held the text from when the document
+   * was first opened. Cancelling that session reverted the document past the
+   * work the first session had already saved.
+   *
+   * Read through a ref rather than a dependency so the snapshot is taken on the
+   * transition into the editor and never refreshed by autosave afterwards.
+   */
+  const liveContentRef = useRef(file.content);
+  liveContentRef.current = file.content;
+  useEffect(() => {
+    if (editMode) originalContentRef.current = liveContentRef.current;
+  }, [editMode]);
 
   const exportPDF = useCallback(() => {
     window.print();
@@ -393,17 +459,9 @@ function MarkdownViewerImpl({
     URL.revokeObjectURL(url);
   }, [file.name]);
 
-  // Back leaves the editor, which discards the draft — nothing is written on
-  // the way out, so a draft with real changes in it asks first. An untouched
-  // editor closes silently, which is what keeps the prompt meaningful.
-  useNavEscape(
-    editMode,
-    () => {
-      if (editorDirtyRef.current && !window.confirm(DISCARD_PROMPT)) return;
-      setEditMode(false);
-    },
-    ESCAPE_DEPTH.mode,
-  );
+  // Back leaves the editor. Autosave has already written the draft, so this
+  // drops nothing the reader typed.
+  useNavEscape(editMode, () => setEditMode(false), ESCAPE_DEPTH.mode);
 
   const allChunks = useMemo(() => fileSubtopics(file), [file.subtopics, file.content, file.name]);
 
@@ -459,62 +517,6 @@ function MarkdownViewerImpl({
   // The markdown actually handed to the renderer. Resolved once here so the
   // plugin hook and the renderer never disagree about which text is on screen.
   const markdownSource = singleMode ? fullRender : renderContent;
-
-  /**
-   * Jump to a labelled equation.
-   *
-   * A reference can point at an equation in a section that is not mounted —
-   * paginated mode renders one chunk at a time — so this resolves the label to
-   * the section that holds it, navigates there, and scrolls once the equation
-   * exists. The registry is built from the whole document here, not from the
-   * section on screen, which is also what keeps equation numbers stable as the
-   * reader pages through.
-   */
-  const equationOwnerChunk = useMemo(() => {
-    const registry = buildEquationRegistry(file.content, {
-      numbering: mathPreferences.numberEquations,
-    });
-    const owners = new Map<string, string>();
-    for (const entry of registry.entries) {
-      if (!entry.label) continue;
-      const at = file.content.indexOf(entry.latex);
-      const chunk =
-        at < 0
-          ? allChunks[0]
-          : allChunks.find((candidate) => {
-              const start = file.content.indexOf(candidate.content);
-              return start >= 0 && at >= start && at < start + candidate.content.length;
-            }) ?? allChunks[0];
-      if (chunk) owners.set(entry.label, chunk.id);
-    }
-    return owners;
-  }, [file.content, allChunks, mathPreferences.numberEquations]);
-
-  const navigateToEquation = useCallback(
-    (label: string) => {
-      const domId = `eq-${label
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")}`;
-      const scroll = () =>
-        requestAnimationFrame(() => {
-          document.getElementById(domId)?.scrollIntoView({ behavior: "smooth", block: "center" });
-        });
-      if (singleMode) {
-        scroll();
-        return;
-      }
-      const owner = equationOwnerChunk.get(label);
-      if (owner && owner !== activeChunk.id) {
-        onNav(file.id, owner);
-        // The chunk mounts on the next commit; give it one before scrolling.
-        setTimeout(scroll, 80);
-        return;
-      }
-      scroll();
-    },
-    [singleMode, equationOwnerChunk, activeChunk.id, onNav, file.id],
-  );
 
   // Syntax highlighting and math typesetting are fetched only for documents
   // that contain code or math — see `useMarkdownPlugins`. Both plugin arrays
@@ -648,20 +650,7 @@ function MarkdownViewerImpl({
               : range.startContainer.parentElement) ?? null)
           : null);
       target?.scrollIntoView({ behavior: "smooth", block: heading ? "start" : "center" });
-
-      // Flash: a text range gets a one-shot CSS highlight, a heading or image
-      // (which have no range) get the equivalent class-based pulse.
-      const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
-        Map<string, any> | undefined;
-      let clear: (() => void) | undefined;
-      if (range && CSSH && typeof (window as any).Highlight !== "undefined") {
-        CSSH.set("dc-saved-flash", new (window as any).Highlight(range));
-        clear = () => CSSH.delete("dc-saved-flash");
-      } else if (target) {
-        target.classList.add("docs-saved-flash");
-        clear = () => target.classList.remove("docs-saved-flash");
-      }
-      if (clear) setTimeout(clear, 1800);
+      flashPassage(range, target);
 
       onSavedShown?.();
     });
@@ -679,8 +668,9 @@ function MarkdownViewerImpl({
   /**
    * Stop a document switch from silently throwing away an open draft.
    *
-   * Nothing is written until the reader presses Done, so every way out of the
-   * editor that isn't Done loses the draft. Only a genuinely changed draft
+   * The editor autosaves, so most navigation is safe — but a draft typed inside
+   * the debounce window, or one the reader is midway through and does not want,
+   * has no other moment to be asked about. Only a genuinely changed draft
    * prompts: leaving an untouched editor stays silent, which is what makes the
    * prompt mean something when it does appear.
    */
@@ -700,7 +690,7 @@ function MarkdownViewerImpl({
   }, []);
   const confirmLeaveEditor = useCallback(() => {
     if (!editorDirtyRef.current) return true;
-    return window.confirm(DISCARD_PROMPT);
+    return window.confirm("This document has unsaved changes. Leave and discard them?");
   }, []);
   const [pendingSelect, setPendingSelect] = useState<{ start: number; end: number } | null>(null);
   const [inspectMissed, setInspectMissed] = useState(false);
@@ -779,8 +769,8 @@ function MarkdownViewerImpl({
     const CSSH = (typeof CSS !== "undefined" && (CSS as any).highlights) as
       Map<string, any> | undefined;
     if (!container || !CSSH || typeof (window as any).Highlight === "undefined") return;
-    // Mid-edit the rendered document is stale — the draft isn't written until
-    // Done. Re-anchoring waits for the reader to leave the editor.
+    // Mid-edit the rendered document is a moving target (the draft autosaves
+    // every 400ms). Re-anchoring waits for the reader to leave the editor.
     if (editMode) return;
 
     // Deferred to the next frame so adding a highlight doesn't repaint every
@@ -980,7 +970,7 @@ function MarkdownViewerImpl({
     return () => anim.cancel();
   }, [activeChunk.id, file.id]);
 
-  // The draft lives in the editor and is written only on Done — see MarkdownEditor.
+  // Autosaving the draft is the editor's own concern now — see MarkdownEditor.
 
   /**
    * Back to the top of *this* document.
@@ -1025,32 +1015,38 @@ function MarkdownViewerImpl({
     else scrollToTop();
   }, [singleMode, activeSubtopicId, file.id]);
 
-  // Opening a search result put the reader at the top of the section holding
-  // the match and stopped there — on a long section the match itself could be
-  // pages below the fold, which read as the result not going anywhere.
-  //
-  // The two effects above own the section-level scroll, so this one runs after
-  // them and moves the rest of the way to the first highlighted occurrence.
-  // `<mark>` elements are painted by the renderer in the same commit as the
-  // content, so this waits a frame rather than reading the previous document's
-  // DOM. Centred rather than aligned to the top: a match is read in the context
-  // of the lines around it.
+  /**
+   * Land on the search hit itself.
+   *
+   * Declared after the two heading scrolls and deferred a frame, so it is the
+   * last word on where the reader ends up: those effects have already moved to
+   * the heading (or given up and gone to the top) by the time this runs, and a
+   * second smooth scroll simply retargets the first.
+   *
+   * Anchored by the matched line, falling back to the query itself — a line may
+   * render differently from its source (markdown syntax is stripped, a match
+   * inside a link or emphasis is split across elements), and the query is the
+   * shortest thing guaranteed to be somewhere in the text.
+   */
   useEffect(() => {
-    if (editMode) return;
-    const q = highlightQuery?.trim();
-    if (!q) return;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      if (cancelled) return;
+    if (!pendingSearch || editMode) return;
+    if (!contentRef.current) return;
+    const frame = requestAnimationFrame(() => {
       const container = contentRef.current;
-      const mark = container?.querySelector("mark");
-      if (mark) mark.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 150);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [highlightQuery, activeChunk.id, activeSubtopicId, file.id, singleMode, editMode]);
+      if (!container) return;
+      const range =
+        firstTextRange(container, pendingSearch.text) ??
+        (pendingSearch.query ? firstTextRange(container, pendingSearch.query) : null);
+      const target = elementOf(range);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The same one-shot flash a saved item gets, for the same reason: on a
+      // dense page, arriving is not the same as seeing where you arrived.
+      flashPassage(range, target);
+
+      onSearchShown?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingSearch, editMode, renderContent, fullRender, onSearchShown]);
 
   // Reading progress now lives in <ReadingProgress>, which writes the
   // percentage straight to its own DOM node. It used to be state up here, and
@@ -1150,18 +1146,6 @@ function MarkdownViewerImpl({
 
   const components = useMemo(
     () => ({
-      // Math elements, produced by the remark passes in `markdown-plugins`.
-      // Spread from a module-level constant so the components themselves stay
-      // referentially stable — an equation must not re-render because a heading
-      // was folded somewhere else on the page.
-      ...MATH_COMPONENTS,
-      // A display equation is a block, so it folds with the section above it
-      // like any other. Inline math (`docs-eq-ref` included) is part of a
-      // paragraph and folds with that paragraph, so it is left alone.
-      [MATH_ELEMENT]: (p: any) =>
-        p["data-display"] === "true" && underCollapsed()
-          ? null
-          : MATH_COMPONENTS[MATH_ELEMENT](p),
       h1: heading(1, "h1"),
       h2: heading(2, "h2"),
       h3: heading(3, "h3"),
@@ -1387,27 +1371,25 @@ function MarkdownViewerImpl({
             </Select>
           )
         }
+        /* Starring lives on the document's own row in the sidebar, and editing
+           lives in that row's menu. What is left here is the one control that
+           changes how this view reads — and when even that does not apply this
+           must be `undefined`, not an empty wrapper, or the header has no way
+           to tell it is empty and reserves its height for nothing. */
         actions={
-          <>
-            {/* Starring lives on the document's own row in the sidebar, and
-                editing lives in that row's menu. What is left here is the one
-                control that changes how this view reads. */}
-            <div className="flex items-center gap-1">
-              {!editMode && onToggleReadingMode && (
-                <button
-                  onClick={onToggleReadingMode}
-                  title={
-                    singleMode
-                      ? "Paged: read one section at a time"
-                      : "Single page: read the whole document"
-                  }
-                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  <Files className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-          </>
+          !editMode && onToggleReadingMode ? (
+            <button
+              onClick={onToggleReadingMode}
+              title={
+                singleMode
+                  ? "Paged: read one section at a time"
+                  : "Single page: read the whole document"
+              }
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
+            >
+              <Files className="h-4 w-4" />
+            </button>
+          ) : undefined
         }
       />
       <div
@@ -1666,10 +1648,13 @@ function MarkdownViewerImpl({
                 ref={editorRef}
                 fileId={file.id}
                 initialContent={file.content}
+                onSave={saveDraft}
                 onDone={leaveEditMode}
                 onCancel={cancelEdit}
                 onDirtyChange={setEditorDirty}
                 inspectMissed={inspectMissed}
+                fileName={file.name}
+                onRename={onRenameFile}
               />
             ) : (
               <div
@@ -1679,23 +1664,13 @@ function MarkdownViewerImpl({
               >
                 <SavedContext.Provider value={savedCtx}>
                   <CollapseContext.Provider value={collapseCtx}>
-                    {/* The equation registry is built from the *whole*
-                        document, not from the section on screen, so equation
-                        numbers and `\ref` targets stay put as the reader pages
-                        through a paginated document. */}
-                    <MathProvider
-                      source={file.content}
-                      preferences={mathPreferences}
-                      navigateToEquation={navigateToEquation}
+                    <MarkdownContent
+                      remarkPlugins={remarkPlugins}
+                      rehypePlugins={rehypePlugins}
+                      components={components}
                     >
-                      <MarkdownContent
-                        remarkPlugins={remarkPlugins}
-                        rehypePlugins={rehypePlugins}
-                        components={components}
-                      >
-                        {markdownSource}
-                      </MarkdownContent>
-                    </MathProvider>
+                      {markdownSource}
+                    </MarkdownContent>
                   </CollapseContext.Provider>
                 </SavedContext.Provider>
               </div>
@@ -1883,10 +1858,19 @@ function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
       {collapse && (
         <button
           onClick={() => collapse.toggle(finalId)}
-          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 md:flex ${
+          /* The hover-reveal above assumes a pointer that can hover. On a touch
+             tablet — where this is shown, being >=md — there is none, so an
+             expanded section's chevron never appeared and a reader could not
+             collapse anything; only re-expanding worked, because a collapsed
+             one is pinned visible. `coarse:opacity-100` gives touch the same
+             affordance a mouse gets. The ::before pads the 24px target out to
+             44px without moving it: the margin it sits in is narrower than 44px
+             at this breakpoint, so growing the box itself would push it off the
+             side of the screen. */
+          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] md:flex ${
             collapsed
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100"
           }`}
           aria-expanded={!collapsed}
           aria-controls={`${finalId}-section`}
@@ -1985,11 +1969,16 @@ function CodeBlock({ children, ...rest }: any) {
         }}
         aria-label={copied ? "Copied" : "Copy code"}
         /* A hover-only reveal leaves this button unreachable on touch, so
-           `hover-none:opacity-100` pins it there. */
-        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+           `hover-none:opacity-100` pins it there. Being permanently visible is
+           also why it loses its label on a touch device: the word doubled the
+           button's width, and parked over the first line of a code block on a
+           phone that was the difference between covering the end of a line and
+           covering half of it. The tick that replaces the icon still reports
+           the copy, and `aria-label` carries the name either way. */
+        className="absolute right-2 top-2 z-10 inline-flex min-h-9 items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2.5 py-1.5 text-xs text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:text-foreground group-hover:opacity-100 coarse:min-h-11 coarse:min-w-11 coarse:justify-center coarse:px-0 [@media(hover:none)]:opacity-100"
       >
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        {copied ? "Copied" : "Copy"}
+        <span className="coarse:hidden">{copied ? "Copied" : "Copy"}</span>
       </button>
       <pre ref={ref} {...rest}>
         {children}

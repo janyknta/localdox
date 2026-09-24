@@ -193,7 +193,7 @@ export function SettingsPage({
             type="button"
             onClick={onClose}
             aria-label="Close settings"
-            className="-mr-1 flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="-mr-1 flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
           >
             <X className="h-4 w-4" />
           </button>
@@ -220,7 +220,7 @@ export function SettingsPage({
                   role="tab"
                   aria-selected={active}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`relative flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md px-2.5 py-2 text-[13px] transition-colors sm:w-full ${
+                  className={`relative flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-md px-2.5 py-2 text-[13px] transition-colors coarse:min-h-11 coarse:px-3.5 sm:w-full ${
                     active
                       ? "font-medium text-foreground sm:bg-accent/40"
                       : "font-normal text-muted-foreground hover:text-foreground"
@@ -632,7 +632,7 @@ function WorkspaceSettings({
             control={
               <button
                 onClick={() => fileRef.current?.click()}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                className="coarse:min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
               >
                 Choose file
               </button>
@@ -644,7 +644,7 @@ function WorkspaceSettings({
             control={
               <button
                 onClick={onExport}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                className="coarse:min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
               >
                 Export
               </button>
@@ -656,7 +656,7 @@ function WorkspaceSettings({
             control={
               <button
                 onClick={onShare}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                className="coarse:min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
               >
                 Share
               </button>
@@ -835,7 +835,7 @@ function ReadingFontSettings({
               <button
                 onClick={() => fileRef.current?.click()}
                 disabled={busy}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                className="coarse:min-h-11 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
               >
                 {busy ? "Loading…" : "Upload"}
               </button>
@@ -890,12 +890,12 @@ function ReadingFontSettings({
                 }}
                 placeholder="Font family"
                 spellCheck={false}
-                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10 coarse:min-h-11"
               />
               <button
                 onClick={() => void applyGoogleFamily()}
                 disabled={googleBusy || !familyDraft.trim()}
-                className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                className="coarse:min-h-11 shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
               >
                 {googleBusy ? "Loading…" : "Use"}
               </button>
@@ -963,7 +963,7 @@ function WorkspaceItemRow({
             if (e.key === "Enter") commit();
             if (e.key === "Escape") cancel();
           }}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10 coarse:min-h-11"
           placeholder="Workspace name"
         />
         <button
@@ -993,7 +993,7 @@ function WorkspaceItemRow({
           {!isCurrent && (
             <button
               onClick={() => onOpen(workspace.id)}
-              className="rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+              className="coarse:min-h-11 coarse:px-3 rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
             >
               Open
             </button>
@@ -1031,7 +1031,7 @@ function ClearAll({ onClick, confirm }: { onClick: () => void; confirm: string }
       onClick={() => {
         if (window.confirm(confirm)) onClick();
       }}
-      className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive"
+      className="coarse:inline-flex coarse:min-h-11 coarse:items-center shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive"
     >
       Clear all
     </button>
@@ -1109,7 +1109,7 @@ function StorageSettings({
                       onEmptyBin();
                     }
                   }}
-                  className="rounded-md px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+                  className="coarse:min-h-11 coarse:px-3 rounded-md px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
                 >
                   Empty Bin
                 </button>
@@ -1137,7 +1137,7 @@ function StorageSettings({
                     onClearStorage();
                   }
                 }}
-                className="rounded-md px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+                className="coarse:min-h-11 coarse:px-4 rounded-md px-3 py-1.5 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
               >
                 Clear
               </button>
@@ -1320,7 +1320,7 @@ function BinSettings({
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => onRestore(file.id)}
-                      className="rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
+                      className="coarse:min-h-11 coarse:px-3 rounded-md px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/10"
                     >
                       Restore
                     </button>
@@ -1330,7 +1330,7 @@ function BinSettings({
                           onDeleteForever(file.id);
                         }
                       }}
-                      className="rounded-md px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+                      className="coarse:min-h-11 coarse:px-3 rounded-md px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
                     >
                       Delete
                     </button>

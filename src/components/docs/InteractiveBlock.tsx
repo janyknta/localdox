@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { useMediaQuery } from "@/hooks/use-media-query";
 
 export type InteractiveKind = "html" | "react";
 export type InteractiveMode = "standard" | "preview" | "split" | "playground";
@@ -167,11 +168,23 @@ export function InteractiveBlock({ kind, code, meta }: InteractiveBlockProps) {
 
   const showSource = mode === "split" || playground;
   const split = mode === "split" || playground;
+  /* Matches the 640px the rest of this block's narrow-screen styling uses. */
+  const stackSplit = useMediaQuery("(max-width: 640px)");
 
   return (
     <section ref={sectionRef} className="interactive-block not-prose">
       {showSource && split ? (
-        <ResizablePanelGroup orientation="horizontal" className="interactive-split">
+        /* Code beside preview needs two readable columns. On a phone the block
+           is ~290px wide, so each half would be ~145px — narrower than a line
+           of the code it is showing. The stylesheet used to try to stack these
+           through `[data-panel-group-direction="horizontal"]`, an attribute
+           this version of the library does not emit, so the rule never applied
+           and the two panes stayed side by side however narrow the screen got.
+           Driving the group's own orientation is what actually turns it. */
+        <ResizablePanelGroup
+          orientation={stackSplit ? "vertical" : "horizontal"}
+          className="interactive-split"
+        >
           <ResizablePanel defaultSize="50%" minSize="25%">
             {sourcePanel}
           </ResizablePanel>
