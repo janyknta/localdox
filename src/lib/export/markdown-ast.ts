@@ -520,7 +520,11 @@ export function columnWidthDemand(header: InlineRun[], cells: InlineRun[][]): nu
   const percentile = (values: number[]): number => {
     if (!values.length) return 0;
     const sorted = [...values].sort((a, b) => a - b);
-    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))];
+    // `ceil(n * 0.9) - 1` rather than `floor(n * 0.9)`: the latter indexes the
+    // last element for every n that is a multiple of ten, which makes the
+    // "90th percentile" the maximum and lets a single outlier row set the
+    // column's width after all — the thing this is here to prevent.
+    return sorted[Math.max(0, Math.ceil(sorted.length * 0.9) - 1)];
   };
 
   const headerText = runsToText(header);

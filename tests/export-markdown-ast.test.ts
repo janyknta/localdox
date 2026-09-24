@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  columnWidthDemand,
   parseInline,
   parseMarkdownBlocks,
   runsToText,
@@ -248,4 +249,54 @@ test("an unterminated fence does not swallow the rest of the document silently",
 
 test("an empty document produces no blocks", () => {
   assert.deepEqual(parseMarkdownBlocks("   \n\n  \n"), []);
+});
+
+// Column widths. Both writers proportion tables through `columnWidthDemand`,
+// and a wide table that Word renders as a wall of one-word lines is the exact
+// failure this is here to prevent — so the relationships between columns are
+// asserted rather than the numbers, which are free to be tuned.
+
+const column = (header: string, ...cells: string[]) =>
+  columnWidthDemand(parseInline(header), cells.map((cell) => parseInline(cell)));
+
+test("a prose column is given more width than a short-value column", () => {
+  const notes = column("Notes", "Migrated to the new pool last sprint; watch p99", "Rebuilding");
+  const id = column("ID", "1", "2", "3");
+  assert.ok(notes > id * 2, `expected the notes column to dwarf the id column (${notes} vs ${id})`);
+});
+
+test("a long header claims width even when its values are short", () => {
+  // Otherwise "Error rate" wraps to two lines on every page of a long table
+  // while the column sits half empty.
+  assert.ok(column("Error rate", "0.01%", "1.2%") > column("Err", "0.01%", "1.2%"));
+});
+
+test("an unbreakable token sets a floor under the column", () => {
+  // A column narrower than its longest word forces a mid-word break no matter
+  // how many lines it gets.
+  assert.ok(column("URL", "https://example.com/a/very/long/path") >= 36);
+});
+
+test("one outlier row does not take the width nine ordinary rows need", () => {
+  const ordinary = Array.from({ length: 9 }, () => "ok");
+  const withOutlier = column("Status", ...ordinary, "a".repeat(200));
+  const without = column("Status", ...ordinary);
+  assert.ok(
+    withOutlier < without * 3,
+    `one outlier should not triple the column (${without} -> ${withOutlier})`,
+  );
+});
+
+test("prose width grows sub-linearly with length", () => {
+  // Weighted by a square root: longer notes deserve more room, but not
+  // proportionally more, or one prose column consumes the whole table.
+  const short = column("Notes", "a".repeat(10).replace(/a/g, "x "));
+  const long = column("Notes", "a".repeat(60).replace(/a/g, "x "));
+  assert.ok(long > short);
+  assert.ok(long < short * 6);
+});
+
+test("every column has a usable minimum", () => {
+  assert.ok(column("#", "1") >= 4);
+  assert.ok(column("", "") >= 4);
 });

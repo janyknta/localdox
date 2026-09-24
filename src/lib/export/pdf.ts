@@ -18,7 +18,7 @@
  */
 
 import type { ExportBlock, InlineRun } from "./markdown-ast";
-import { parseMarkdownBlocks, runsToText } from "./markdown-ast";
+import { columnWidthDemand, parseMarkdownBlocks, runsToText } from "./markdown-ast";
 import { renderMermaid } from "@/components/docs/mermaid-render-cache";
 
 function escapeHtml(value: string): string {
