@@ -281,8 +281,6 @@ function HtmlFileViewer({
   const [showSource, setShowSource] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(file.content);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(file.content);
 
   // The source Cancel puts back. Captured when the editor opens, not when the
   // document does: autosave has been writing the draft into `file.content`, so
