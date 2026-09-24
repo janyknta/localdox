@@ -51,7 +51,17 @@
       "Bash(grep -o '.\\\\{0,180\\\\}katex-B7rAX3Vi.\\\\{0,60\\\\}' .output/public/assets/chunk-WYO6CB5R-C-366P-a.js)",
       "Bash(curl -s -o /dev/null -w \"%{http_code} %{size_download}\\\\n\" http://localhost:5199/__test/corpus.md)",
       "Bash(grep -n \"^/\\\\*\\\\*$\" -A9 src/lib/math/sanitize.ts)",
-      "Bash(node --experimental-strip-types -e ' *)"
+      "Bash(node --experimental-strip-types -e ' *)",
+      "Bash(security find-generic-password *)",
+      "Bash(security dump-keychain *)",
+      "Bash(python3 -c ' *)",
+      "Bash(claude setup-token *)",
+      "Bash(python3)",
+      "Bash(zsh -l -c 'type claude-b >/dev/null 2>&1 && echo \"claude-b OK in login shell\" || echo \"MISSING in login shell\"')",
+      "Bash(zsh -i -c 'type claude-b >/dev/null 2>&1 && echo \"claude-b OK in interactive shell\" || echo \"MISSING\"')",
+      "Bash(cp ~/.zshrc.bak-20260922-174036 ~/.zshrc)",
+      "Bash(zsh -n ~/.zshrc)",
+      "Bash(zsh -i -c 'type claude-a claude-b claude-who claude-save-b 2>&1 | grep -c \"not found\"')"
     ],
     "additionalDirectories": [
       "/System/Library/Fonts"

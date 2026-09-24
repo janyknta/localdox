@@ -102,6 +102,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ViewerHeader, ViewerPager } from "./ViewerHeader";
+import { ExportMenu } from "./ExportMenu";
 import { ESCAPE_DEPTH, useNavEscape } from "@/hooks/use-nav-history";
 
 interface Props {
@@ -1377,18 +1378,26 @@ function MarkdownViewerImpl({
            must be `undefined`, not an empty wrapper, or the header has no way
            to tell it is empty and reserves its height for nothing. */
         actions={
-          !editMode && onToggleReadingMode ? (
-            <button
-              onClick={onToggleReadingMode}
-              title={
-                singleMode
-                  ? "Paged: read one section at a time"
-                  : "Single page: read the whole document"
-              }
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
-            >
-              <Files className="h-4 w-4" />
-            </button>
+          !editMode ? (
+            <>
+              {onToggleReadingMode && (
+                <button
+                  onClick={onToggleReadingMode}
+                  title={
+                    singleMode
+                      ? "Paged: read one section at a time"
+                      : "Single page: read the whole document"
+                  }
+                  className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:h-11 coarse:w-11"
+                >
+                  <Files className="h-4 w-4" />
+                </button>
+              )}
+              {/* Export sits with the document rather than only in the sidebar
+                  row menu: while reading is when you want it, and on a phone
+                  that panel is closed. */}
+              <ExportMenu file={file} />
+            </>
           ) : undefined
         }
       />

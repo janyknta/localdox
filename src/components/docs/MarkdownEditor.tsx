@@ -80,7 +80,7 @@ function MarkdownEditorImpl(
   {
     initialContent,
     fileId,
-   
+    onSave,
     onDone,
     onCancel,
     inspectMissed,

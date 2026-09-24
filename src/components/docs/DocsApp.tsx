@@ -76,6 +76,9 @@ const SharedFilesDialog = lazy(() =>
   import("./SharedFilesDialog").then((m) => ({ default: m.SharedFilesDialog })),
 );
 import type { MdFile, MdChunk } from "@/lib/markdown-utils";
+// Type only: the writers behind it are a dynamic import at the call site, so
+// the OOXML builder is never on the path to the first paint.
+import type { ExportFormat } from "@/lib/export";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { isBinExpired } from "@/lib/persistence";
 import { fileSubtopics, readingMinutes } from "@/lib/markdown-utils";
@@ -1378,21 +1381,49 @@ export function DocsApp() {
     markDirty();
   }, [markDirty]);
 
-  const downloadFile = useCallback((id: string) => {
+  /**
+   * Write a document out in the format the reader chose.
+   *
+   * Word and PDF both have to render every diagram in the document before a
+   * single byte can be written, which on a long document is seconds of work.
+   * A silent wait reads as a dead click, so the conversion is announced and the
+   * toast is resolved in place — the same pattern upload already uses.
+   */
+  const downloadFile = useCallback(async (id: string, format: ExportFormat = "original") => {
     const file = filesRef.current.find((f) => f.id === id);
     if (!file) return;
-    let url = "";
-    if (file.data) {
-      url = file.data;
-    } else {
-      const blob = new Blob([file.content], { type: file.mimeType || "text/markdown" });
-      url = URL.createObjectURL(blob);
+
+    const { exportDocument, FORMAT_LABEL } = await import("@/lib/export");
+    // Only the converting formats are slow enough to be worth a spinner;
+    // handing back bytes the app already holds is instant and a toast for it
+    // would be noise.
+    const slow = format === "docx" || format === "pdf" || format === "html";
+    const toastId = slow
+      ? toast.loading(`Preparing ${FORMAT_LABEL[format]}…`, {
+          description: file.name,
+        })
+      : undefined;
+
+    try {
+      const result = await exportDocument(file, format);
+      if (toastId === undefined) return;
+      // PDF hands off to the browser's print dialog rather than dropping a
+      // file, so saying "downloaded" would be a lie the reader can see.
+      toast.success(
+        result.kind === "printed" ? "Ready to save as PDF" : `Downloaded ${result.filename}`,
+        {
+          id: toastId,
+          description:
+            result.kind === "printed"
+              ? 'Choose "Save as PDF" as the destination in the print dialog.'
+              : undefined,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed.";
+      if (toastId === undefined) toast.error(message);
+      else toast.error("Export failed", { id: toastId, description: message });
     }
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = file.name;
-    a.click();
-    if (!file.data) URL.revokeObjectURL(url);
   }, []);
 
   const renameFile = useCallback(
