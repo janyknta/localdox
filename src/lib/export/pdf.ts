@@ -97,6 +97,65 @@ function listHtml(block: Extract<ExportBlock, { type: "list" }>): string {
   return html;
 }
 
+/** Columns past which a portrait page stops being able to hold the table. */
+const LANDSCAPE_THRESHOLD = 7;
+
+/**
+ * A table, sized to what it holds.
+ *
+ * Same problem the DOCX writer has and the same shape of answer, but the
+ * mechanisms differ enough to be worth stating: the browser *will* shrink a
+ * table to fit, so the failure here is not an overflowing grid but an
+ * illegible one — every column equal, the sentence column shredded to one word
+ * a line while the two-digit column sits half empty.
+ *
+ * So columns get a width proportional to their content, dense tables get
+ * smaller type, and a table past the column threshold is rotated onto its own
+ * landscape page. `@page` orientation cannot vary per element in any browser,
+ * so rotation here is a CSS transform rather than a real page rotation — which
+ * is also what makes it work when the reader saves to PDF rather than printing.
+ */
+function tableHtml(block: Extract<ExportBlock, { type: "table" }>): string {
+  const columns = Math.max(1, block.header.length);
+
+  const longestWord = (runs: InlineRun[]) =>
+    runsToText(runs)
+      .split(/\s+/)
+      .reduce((max, word) => Math.max(max, word.length), 0);
+
+  // The 90th percentile rather than the maximum, so one outlier cell does not
+  // take the whole table's width from the columns around it.
+  const demands = block.header.map((cell, index) => {
+    const lengths = block.rows.map((row) => longestWord(row[index] ?? [])).sort((a, b) => a - b);
+    const percentile = lengths.length
+      ? lengths[Math.min(lengths.length - 1, Math.floor(lengths.length * 0.9))]
+      : 0;
+    return Math.max(4, longestWord(cell) * 1.2, percentile);
+  });
+  const total = demands.reduce((sum, demand) => sum + demand, 0) || columns;
+  const widths = demands.map((demand) =>
+    Math.min(40, Math.max(100 / columns / 2, (demand / total) * 100)),
+  );
+  const scale = 100 / widths.reduce((sum, width) => sum + width, 0);
+
+  const cols = widths
+    .map((width) => `<col style="width:${(width * scale).toFixed(2)}%"/>`)
+    .join("");
+  const head = block.header.map((cell) => `<th>${runsHtml(cell)}</th>`).join("");
+  const body = block.rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${runsHtml(cell)}</td>`).join("")}</tr>`)
+    .join("");
+
+  const density = columns > 9 ? " dense" : columns > 6 ? " compact" : "";
+  const table =
+    `<table class="grid${density}"><colgroup>${cols}</colgroup>` +
+    `<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+
+  if (columns <= LANDSCAPE_THRESHOLD) return table;
+
+  return `<div class="landscape"><div class="landscape-inner">${table}</div></div>`;
+}
+
 function blockHtml(block: ExportBlock, diagrams: Map<string, string>): string {
   switch (block.type) {
     case "heading": {
@@ -130,13 +189,8 @@ function blockHtml(block: ExportBlock, diagrams: Map<string, string>): string {
     }
     case "quote":
       return `<blockquote>${block.blocks.map((inner) => blockHtml(inner, diagrams)).join("")}</blockquote>`;
-    case "table": {
-      const head = block.header.map((cell) => `<th>${runsHtml(cell)}</th>`).join("");
-      const body = block.rows
-        .map((row) => `<tr>${row.map((cell) => `<td>${runsHtml(cell)}</td>`).join("")}</tr>`)
-        .join("");
-      return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
-    }
+    case "table":
+      return tableHtml(block);
     case "rule":
       return "<hr/>";
     case "image":
