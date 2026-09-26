@@ -1267,6 +1267,314 @@
   margin-right: 0.5rem;
 }
 
+/* ---------------------------------------------------------------------------
+   Math
+   ---------------------------------------------------------------------------
+   One rule set for all three engines. Nothing here names a symbol or a colour
+   directly: everything inherits `currentColor` from the prose, which is what
+   makes a theme switch free — no equation re-renders, because no equation
+   carries a colour of its own. KaTeX, MathJax's CHTML and Temml's MathML all
+   respect `color: inherit`, so the same three declarations cover them.
+   --------------------------------------------------------------------------- */
+
+.katex,
+.docs-math-inline .katex,
+mjx-container,
+.docs-math-rendered math,
+.docs-math-inline math {
+  color: inherit;
+}
+
+/* MathJax paints its own colour onto the container; inherit instead. */
+mjx-container[jax="CHTML"] {
+  color: inherit;
+}
+
+/* Inline math sits in a line of prose, so it must not introduce its own
+   line-height or break the baseline. KaTeX's own metrics handle the rest. */
+.docs-math-inline {
+  display: inline;
+  /* An inline equation that is genuinely too wide for the column (a long
+     conditional expression written inline) may wrap at its operators rather
+     than forcing the paragraph to overflow. */
+  overflow-wrap: break-word;
+}
+.docs-math-inline .katex {
+  /* KaTeX defaults to 1.21em, which reads oversized against a serif body face
+     at this reader's measure. */
+  font-size: 1.08em;
+}
+
+/* A display equation: its own block, with room for the number and the tray. */
+.docs-math-block {
+  position: relative;
+  margin: 1.75rem 0;
+  /* The number sits in the right margin of the reading column, so the equation
+     is optically centred on the column rather than on the space left over. */
+  padding-right: 3.5rem;
+  /* Never widens the article, whatever it contains. */
+  max-width: 100%;
+}
+
+/* The scroll box is the answer to a long equation on a narrow screen: the
+   equation keeps its full size and the box scrolls, rather than the equation
+   being shrunk to an unreadable width. */
+.docs-math-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Vertical breathing room so `\int` limits and tall fractions are not clipped
+     by the scroll box itself. */
+  padding: 0.35rem 0.25rem 0.6rem;
+  /* Momentum scrolling on touch, and a scroll-snap-free feel. */
+  -webkit-overflow-scrolling: touch;
+  /* Keyboard-focusable, so a reader who cannot swipe can still pan a wide
+     equation with the arrow keys. */
+  scrollbar-width: thin;
+}
+.docs-math-scroll:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+/* Centre a short equation, left-align one that overflows: a wide equation that
+   starts off-screen to the left is unreadable. */
+.docs-math-scroll > .docs-math-rendered {
+  display: block;
+  min-width: fit-content;
+  text-align: center;
+}
+.docs-math-scroll .katex-display,
+.docs-math-scroll mjx-container[display="true"] {
+  /* KaTeX and MathJax both add their own display margins; the block above owns
+     the spacing so they cancel here. */
+  margin: 0;
+}
+.docs-math-scroll .katex-display > .katex {
+  /* KaTeX's display wrapper is `width: 100%` with centred text, which clips the
+     overflowing half of a wide equation instead of letting it scroll. */
+  white-space: nowrap;
+}
+
+/* Temml output is MathML, laid out by the browser. */
+.docs-math-scroll math[display="block"] {
+  display: block;
+  margin: 0 auto;
+}
+
+/* The equation number. `(3)`, in the margin, vertically centred — the
+   convention, and unselectable so copying an equation's text does not pick up
+   its number. */
+.docs-math-number {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* The actions tray. Hover-revealed on a pointer device, always visible on
+   touch — the same rule the code block's copy button follows. */
+.docs-math-actions {
+  position: absolute;
+  right: 0;
+  top: -0.35rem;
+  display: flex;
+  gap: 0.125rem;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.docs-math-block:hover .docs-math-actions,
+.docs-math-block:focus-within .docs-math-actions,
+.docs-math-actions:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .docs-math-actions {
+    opacity: 1;
+  }
+}
+.docs-math-actions-static {
+  position: static;
+  opacity: 1;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+.docs-math-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* 28px visually, with the touch target extended by the padding below so it
+     clears the 44px guideline without a 44px box beside the equation. */
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: 0.375rem;
+  border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--background) 85%, transparent);
+  color: var(--muted-foreground);
+  backdrop-filter: blur(4px);
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+.docs-math-actions button:hover {
+  color: var(--foreground);
+  border-color: color-mix(in oklab, var(--primary) 40%, var(--border));
+}
+.docs-math-actions button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* Show Source, and the source shown beside an error. */
+.docs-math-source {
+  margin: 0.5rem 0 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--foreground);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* While an engine is still loading, the source stands in. Roughly the right
+   width, and the most informative thing available. */
+.docs-math-pending {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--muted-foreground);
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  border-radius: 0.25rem;
+  padding: 0 0.2em;
+}
+.docs-math-pending-block {
+  display: block;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  text-align: center;
+  white-space: pre-wrap;
+}
+
+/* A clickable equation reference: `\eqref`, or the prose `{{eq:label}}` form. */
+.docs-eq-ref {
+  color: var(--primary);
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px dotted color-mix(in oklab, var(--primary) 50%, transparent);
+  cursor: pointer;
+}
+.docs-eq-ref:hover {
+  border-bottom-style: solid;
+}
+.docs-eq-ref:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 0.125rem;
+}
+/* An undefined label. Muted rather than alarming: it is the author's problem,
+   surfaced without shouting at the reader. */
+.docs-eq-ref-missing {
+  color: var(--muted-foreground);
+  border-bottom: 1px dotted var(--muted-foreground);
+  cursor: help;
+}
+
+/* A malformed or unsupported equation. Non-destructive: the source is shown as
+   written, and the document around it renders normally. */
+.docs-math-error {
+  position: relative;
+  margin: 1.5rem 0;
+  padding: 0.75rem 0.875rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--destructive) 35%, var(--border));
+  background: color-mix(in oklab, var(--destructive) 6%, transparent);
+}
+.docs-math-error-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.docs-math-error-badge {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--destructive);
+}
+.docs-math-error-message {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.docs-math-error-detail {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.docs-math-error-inline {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--destructive);
+  background: color-mix(in oklab, var(--destructive) 10%, transparent);
+  border-bottom: 1px dotted var(--destructive);
+  border-radius: 0.25rem;
+  padding: 0 0.2em;
+  cursor: help;
+}
+
+/* Narrow screens: the number moves under the equation rather than competing
+   with it for a column that is already tight. */
+@media (max-width: 640px) {
+  .docs-math-block {
+    padding-right: 0;
+    padding-bottom: 1.25rem;
+  }
+  .docs-math-number {
+    top: auto;
+    bottom: 0;
+    right: 0;
+    transform: none;
+  }
+  .docs-math-actions {
+    top: auto;
+    bottom: 0;
+    right: auto;
+    left: 0;
+  }
+}
+
+/* Print: equations must not be clipped by a scroll box that does not exist on
+   paper, and the interactive tray has nothing to do there. */
+@media print {
+  .docs-math-scroll {
+    overflow: visible;
+  }
+  .docs-math-scroll .katex-display > .katex {
+    white-space: normal;
+  }
+  .docs-math-actions,
+  .docs-math-zoom {
+    display: none !important;
+  }
+}
+
 /* Better dark-mode katex */
 .dark .katex {
   color: var(--foreground);

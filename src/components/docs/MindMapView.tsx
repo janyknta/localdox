@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Home, Minus, Plus, X } from "lucide-react";
 import { initialOpenDepth, openToDepth, type MindMapNode, type MindMapTree } from "@/lib/mindmap";
+import { isZoomWheel, wheelPixels, wheelZoomFactor } from "@/lib/viewport";
 
 // A tidy tree with enough air to scan a branch without merging it visually
 // into its neighbours. Structure is carried by alignment, never physics.
@@ -203,11 +204,75 @@ export function MindMapView({
       }),
     [],
   );
-  const zoomBy = useCallback(
-    (factor: number) => setZoom((value) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value * factor))),
-    [],
-  );
+  // The latest view, for handlers that fire faster than React re-renders: a
+  // pinch delivers several wheel events per frame, and each must build on the
+  // one before rather than on a stale render.
+  const viewRef = useRef({ zoom, pan });
+  viewRef.current = { zoom, pan };
+  /** Zoom about a point in client pixels (the pointer), or the frame's centre. */
+  const zoomBy = useCallback((factor: number, clientX?: number, clientY?: number) => {
+    const element = frameRef.current;
+    if (!element) return;
+    const { zoom: current, pan: offset } = viewRef.current;
+    const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, current * factor));
+    if (next === current) return;
+    const rect = element.getBoundingClientRect();
+    const ox = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+    const oy = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+    const k = next / current;
+    const nextPan = { x: ox - (ox - offset.x) * k, y: oy - (oy - offset.y) * k };
+    viewRef.current = { zoom: next, pan: nextPan };
+    setZoom(next);
+    setPan(nextPan);
+  }, []);
+
+  // Trackpad and mouse wheel. Pinch (ctrl-wheel) and Ctrl/⌘ + wheel zoom at
+  // the pointer. Two-finger scrolling pans the full-page map; embedded in a
+  // document, vertical scrolling is left to the page so reading carries on
+  // past the figure, and only sideways scrolling pans it.
+  useEffect(() => {
+    const element = frameRef.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (isZoomWheel(event)) {
+        event.preventDefault();
+        zoomBy(wheelZoomFactor(event), event.clientX, event.clientY);
+        return;
+      }
+      const { dx, dy } = wheelPixels(event, element.clientHeight);
+      const sideways = Math.abs(dx) > Math.abs(dy);
+      if (embedded && !sideways) return;
+      event.preventDefault();
+      const { zoom: current, pan: offset } = viewRef.current;
+      const nextPan = { x: offset.x - dx, y: embedded ? offset.y : offset.y - dy };
+      viewRef.current = { zoom: current, pan: nextPan };
+      setPan(nextPan);
+    };
+    // Safari's trackpad pinch.
+    let gestureScale = 1;
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureScale = 1;
+    };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+      zoomBy(gesture.scale / gestureScale, gesture.clientX, gesture.clientY);
+      gestureScale = gesture.scale;
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("gesturestart", onGestureStart);
+    element.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("gesturestart", onGestureStart);
+      element.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, [embedded, zoomBy]);
+
   const onPointerDown = (event: React.PointerEvent) => {
+    // Primary or middle button; right-click stays a context menu.
+    if (event.button !== 0 && event.button !== 1) return;
     if ((event.target as Element).closest("[data-mindmap-node]")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { x: event.clientX, y: event.clientY, px: pan.x, py: pan.y };

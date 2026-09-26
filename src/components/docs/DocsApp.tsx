@@ -27,6 +27,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   activeFileOf,
+  closeFileEverywhere,
   closeTab,
   hydratePanes,
   openInPane,
@@ -36,8 +37,14 @@ import {
   toPersisted,
   type PaneLayout,
 } from "@/lib/panes";
+import {
+  applyToDestination,
+  planTransfer,
+  transferCounts,
+} from "@/lib/workspace-transfer";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
+import { MoveToWorkspaceDialog } from "./MoveToWorkspaceDialog";
 import type { AskAiPrefill } from "./ai/AskAiPanel";
 
 // Code-split surfaces. None of these is on the path to reading a document — the
@@ -76,10 +83,18 @@ const SharedFilesDialog = lazy(() =>
   import("./SharedFilesDialog").then((m) => ({ default: m.SharedFilesDialog })),
 );
 import type { MdFile, MdChunk } from "@/lib/markdown-utils";
+// Type only: the writers behind it are a dynamic import at the call site, so
+// the OOXML builder is never on the path to the first paint.
+import type { ExportFormat } from "@/lib/export";
 import type { Highlight } from "@/lib/dom-highlighter";
 import { isBinExpired } from "@/lib/persistence";
 import { fileSubtopics, readingMinutes } from "@/lib/markdown-utils";
-import { getDocumentKind, importDocumentFile, SUPPORTED_ACCEPT } from "@/lib/document-utils";
+import {
+  DISCARD_PROMPT,
+  getDocumentKind,
+  importDocumentFile,
+  SUPPORTED_ACCEPT,
+} from "@/lib/document-utils";
 import { clearArtifactResolutionCache } from "@/lib/workspace-artifacts";
 import { loadReadingFont, warmAppFonts } from "@/lib/fonts";
 import { restoreCustomFont } from "@/lib/custom-font";
@@ -111,6 +126,8 @@ import {
   type ReadingMode,
   type ReadingFont,
 } from "@/lib/persistence";
+import { clearMathCache } from "@/lib/math/renderer";
+import type { MathPreferences, MathRendererType } from "@/lib/math/types";
 import {
   findSaved,
   migrateBookmarks,
@@ -384,7 +401,17 @@ export function DocsApp() {
   const [readingFont, setReadingFont] = useState<ReadingFont>(() => loadPrefs().readingFont);
   const [googleFont, setGoogleFont] = useState<string | null>(() => loadPrefs().googleFont);
   const [diagramColors, setDiagramColors] = useState<boolean>(() => loadPrefs().diagramColors);
+  const [diagramCamera, setDiagramCamera] = useState<boolean>(() => loadPrefs().diagramCamera);
+  const [diagramFollowNumbers, setDiagramFollowNumbers] = useState<boolean>(
+    () => loadPrefs().diagramFollowNumbers,
+  );
+  const [diagramNumbers, setDiagramNumbers] = useState<boolean>(() => loadPrefs().diagramNumbers);
   const [aiEnabled, setAiEnabled] = useState<boolean>(() => loadPrefs().aiEnabled);
+  const [mathRenderer, setMathRenderer] = useState<MathRendererType>(
+    () => loadPrefs().mathRenderer,
+  );
+  const [mathNumbering, setMathNumbering] = useState<boolean>(() => loadPrefs().mathNumbering);
+  const [mathExplorer, setMathExplorer] = useState<boolean>(() => loadPrefs().mathExplorer);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
@@ -605,6 +632,20 @@ export function DocsApp() {
     savePrefs({ diagramColors });
   }, [diagramColors]);
 
+  // The explainer camera rides the same channel, for the same reason.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-diagram-camera", diagramCamera ? "on" : "off");
+    savePrefs({ diagramCamera });
+  }, [diagramCamera]);
+
+  // Step order and step numbers ride the same channel.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-diagram-order", diagramFollowNumbers ? "numbered" : "auto");
+    root.setAttribute("data-diagram-numbers", diagramNumbers ? "on" : "off");
+    savePrefs({ diagramFollowNumbers, diagramNumbers });
+  }, [diagramFollowNumbers, diagramNumbers]);
+
   // Turning AI off removes its surfaces rather than disabling them, so the
   // attribute is published for CSS as well as read through props.
   useEffect(() => {
@@ -694,6 +735,46 @@ export function DocsApp() {
   useEffect(() => {
     savePrefs({ readingMode });
   }, [readingMode]);
+
+  useEffect(() => {
+    savePrefs({ mathRenderer, mathNumbering, mathExplorer });
+  }, [mathRenderer, mathNumbering, mathExplorer]);
+
+  /**
+   * Switching engines invalidates every rendered equation: the cache is keyed
+   * by renderer preference, so the old entries are simply unreachable rather
+   * than wrong — but dropping them keeps memory from holding two full sets.
+   */
+  useEffect(() => {
+    clearMathCache();
+  }, [mathRenderer]);
+
+  /**
+   * MathJax's accessibility explorer, turned on for the page when the reader
+   * asks for it. It pulls in a speech-rule engine, which is why it is neither
+   * the default nor loaded alongside MathJax itself.
+   */
+  useEffect(() => {
+    if (!mathExplorer) return;
+    // Imported here rather than at module scope: a static import would pull
+    // MathJax's adapter — and with it the loader for a 1 MB engine — into the
+    // initial bundle of every reader, math or no math.
+    void import("@/lib/math/adapters/mathjax")
+      .then((module) => module.enableExplorer())
+      .catch(() => {
+        // Nothing to recover: expressions stay readable, they just aren't
+        // keyboard-explorable. Surfacing a toast for it would be noise.
+      });
+  }, [mathExplorer]);
+
+  /**
+   * What the viewer passes to its math layer. Memoized because it crosses into
+   * a memoized component — a fresh object here would re-render every document.
+   */
+  const mathPreferences = useMemo<MathPreferences>(
+    () => ({ renderer: mathRenderer, numberEquations: mathNumbering }),
+    [mathRenderer, mathNumbering],
+  );
 
   useEffect(() => {
     savePrefs({ readingFont });
@@ -1207,7 +1288,7 @@ export function DocsApp() {
     // Re-opening the document already on screen is not leaving it.
     if (!editorDirtyRef.current) return true;
     if (fileId && fileId === activeFileIdRef.current) return true;
-    return window.confirm("This document has unsaved changes. Leave and discard them?");
+    return window.confirm(DISCARD_PROMPT);
   }, []);
 
   const handleSelect = useCallback(
@@ -1326,21 +1407,108 @@ export function DocsApp() {
     markDirty();
   }, [markDirty]);
 
-  const downloadFile = useCallback((id: string) => {
+  /**
+   * Write a document out in the format the reader chose.
+   *
+   * Word and PDF both have to render every diagram in the document before a
+   * single byte can be written, which on a long document is seconds of work.
+   * A silent wait reads as a dead click, so the conversion is announced and the
+   * toast is resolved in place — the same pattern upload already uses.
+   */
+  const downloadFile = useCallback(async (id: string, format: ExportFormat = "original") => {
     const file = filesRef.current.find((f) => f.id === id);
     if (!file) return;
-    let url = "";
-    if (file.data) {
-      url = file.data;
-    } else {
-      const blob = new Blob([file.content], { type: file.mimeType || "text/markdown" });
-      url = URL.createObjectURL(blob);
+
+    const { exportDocument, FORMAT_LABEL } = await import("@/lib/export");
+    // Only the converting formats are slow enough to be worth a spinner;
+    // handing back bytes the app already holds is instant and a toast for it
+    // would be noise.
+    const slow = format === "docx" || format === "pdf" || format === "html";
+    const toastId = slow
+      ? toast.loading(`Preparing ${FORMAT_LABEL[format]}…`, {
+          description: file.name,
+        })
+      : undefined;
+
+    try {
+      const result = await exportDocument(file, format);
+      if (toastId === undefined) return;
+      // PDF hands off to the browser's print dialog rather than dropping a
+      // file, so saying "downloaded" would be a lie the reader can see.
+      toast.success(
+        result.kind === "printed" ? "Ready to save as PDF" : `Downloaded ${result.filename}`,
+        {
+          id: toastId,
+          description:
+            result.kind === "printed"
+              ? 'Choose "Save as PDF" as the destination in the print dialog.'
+              : undefined,
+        },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Export failed.";
+      if (toastId === undefined) toast.error(message);
+      else toast.error("Export failed", { id: toastId, description: message });
     }
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = file.name;
-    a.click();
-    if (!file.data) URL.revokeObjectURL(url);
+  }, []);
+
+  /**
+   * Export a selection of documents, one file each.
+   *
+   * A batch is reported as one outcome rather than one toast per file: five
+   * stacked "Downloaded …" toasts tell the reader nothing they cannot see in
+   * their downloads folder, while "4 of 5" and the name of the one that failed
+   * is the part they cannot get anywhere else.
+   */
+  const downloadFiles = useCallback(async (ids: string[], format: ExportFormat) => {
+    const selected = ids
+      .map((id) => filesRef.current.find((f) => f.id === id))
+      .filter((file): file is MdFile => Boolean(file));
+    if (!selected.length) return;
+
+    const { exportDocuments, FORMAT_LABEL, isBatchable } = await import("@/lib/export");
+
+    // PDF goes through the browser's modal print dialog, so a batch would queue
+    // one per file and make the reader name each by hand. Saying so is better
+    // than starting something they would have to sit through.
+    if (!isBatchable(format)) {
+      toast.error(`${FORMAT_LABEL[format]} exports one document at a time`, {
+        description: "Export the documents individually, or choose another format.",
+      });
+      return;
+    }
+
+    const total = selected.length;
+    const toastId = toast.loading(`Exporting 0 of ${total} as ${FORMAT_LABEL[format]}…`);
+    try {
+      const result = await exportDocuments(selected, format, (done) => {
+        toast.loading(`Exporting ${done} of ${total} as ${FORMAT_LABEL[format]}…`, {
+          id: toastId,
+        });
+      });
+
+      if (!result.failed.length) {
+        toast.success(`Exported ${result.ok} document${result.ok === 1 ? "" : "s"}`, {
+          id: toastId,
+        });
+        return;
+      }
+      // Name the first failure rather than only counting them: with one bad
+      // document in a batch of ten, the name is the whole of the useful part.
+      const [first] = result.failed;
+      const others = result.failed.length - 1;
+      toast.warning(`Exported ${result.ok} of ${total}`, {
+        id: toastId,
+        description:
+          `${first.name}: ${first.reason}` +
+          (others > 0 ? ` (and ${others} other${others === 1 ? "" : "s"})` : ""),
+      });
+    } catch (error) {
+      toast.error("Export failed", {
+        id: toastId,
+        description: error instanceof Error ? error.message : undefined,
+      });
+    }
   }, []);
 
   const renameFile = useCallback(
@@ -1365,10 +1533,30 @@ export function DocsApp() {
       const taken = new Set(snapshotRef.current.files.map((f) => f.name));
       const isMermaid = documentKind === "mermaid";
       const isBoard = documentKind === "board";
-      const name = uniqueFileName(
+      const extension = isBoard ? ".excalidraw" : isMermaid ? ".mmd" : ".md";
+      const suggested = uniqueFileName(
         isBoard ? "board.excalidraw" : isMermaid ? "animation.mmd" : "new.md",
         taken,
       );
+
+      // Ask for the name up front. Creating the document and leaving the reader
+      // to find Rename in a menu meant every new file started as "new.md", and
+      // a workspace filled up with documents named after nothing.
+      const entered = window.prompt("Name for the new file:", suggested);
+      // Cancel means cancel — no document, rather than one with the default name.
+      if (entered === null) return;
+      const trimmed = entered.trim();
+      // The extension is what routes a document to its viewer and editor, so it
+      // is appended when the reader leaves it off rather than left to chance.
+      const withExtension =
+        !trimmed || trimmed === extension
+          ? suggested
+          : trimmed.toLowerCase().endsWith(extension)
+            ? trimmed
+            : `${trimmed}${extension}`;
+      // A name already in use would make two documents indistinguishable in the
+      // sidebar, so it is disambiguated the same way the default one is.
+      const name = taken.has(withExtension) ? uniqueFileName(withExtension, taken) : withExtension;
       const id = `${name}-${crypto.randomUUID().slice(0, 8)}`;
       const content = isMermaid
         ? `---
@@ -1763,6 +1951,113 @@ flowchart LR
       savePrefs({ lastWorkspaceId: id });
     },
     [persistNow, hydrateWorkspace],
+  );
+
+  /**
+   * What the sidebar asked to move, held while the reader picks a destination.
+   *
+   * The selection has to survive the menu closing — by the time the dialog is
+   * on screen the rows it came from are gone — so it lives here rather than in
+   * the sidebar's own state.
+   */
+  const [pendingMove, setPendingMove] = useState<{
+    fileIds: string[];
+    folderIds: string[];
+  } | null>(null);
+  const [moving, setMoving] = useState(false);
+
+  /**
+   * Everything the move will actually touch, expanded from the selection.
+   *
+   * Computed here rather than in the dialog so the count the reader confirms is
+   * produced by the same code that performs the move — a folder's contents
+   * included. A dialog counting only what was clicked would understate it.
+   */
+  const pendingMoveSummary = useMemo(() => {
+    if (!pendingMove) return { files: 0, folders: 0 };
+    const plan = planTransfer(
+      { files: filesRef.current, folders, saved, highlights },
+      { files: [], folders: [] },
+      pendingMove,
+    );
+    return { files: plan.files.length, folders: plan.folders.length };
+  }, [pendingMove, folders, saved, highlights]);
+
+  /**
+   * Move documents and folders into another workspace.
+   *
+   * The destination is written first and the source is only trimmed once that
+   * write has succeeded. Done the other way round, a failure between the two
+   * steps would take the documents out of this workspace without putting them
+   * in the other one — the one outcome a local-first app must never produce.
+   * The cost of this order is a possible duplicate rather than a loss, which is
+   * the right way for it to fail.
+   */
+  const moveToWorkspace = useCallback(
+    async (destinationId: string) => {
+      const selection = pendingMove;
+      if (!selection) return;
+
+      setMoving(true);
+      const toastId = toast.loading("Moving…");
+      try {
+        // Flush this workspace first: the plan is built from live state, and an
+        // unsaved edit would otherwise be written back over the move.
+        if (!(await persistNow(true))) throw new Error("Could not save this workspace first.");
+
+        const destination = await persistence.getWorkspace(destinationId);
+        if (!destination) throw new Error("That workspace no longer exists.");
+
+        const plan = planTransfer(
+          { files: filesRef.current, folders, saved, highlights },
+          destination,
+          selection,
+        );
+        if (!plan.files.length && !plan.folders.length) {
+          toast.info("Nothing to move", { id: toastId });
+          return;
+        }
+
+        await persistence.putWorkspace(applyToDestination(destination, plan));
+
+        // Only now does anything leave this workspace.
+        setFiles((prev) => prev.filter((file) => !plan.removeFileIds.has(file.id)));
+        setFolders((prev) => prev.filter((folder) => !plan.removeFolderIds.has(folder.id)));
+        setSaved((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
+        setHighlights((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
+        // A moved document must not stay open in a pane pointing at a file this
+        // workspace no longer has.
+        setPaneLayout((prev) => closeFileEverywhere(prev, [...plan.removeFileIds]));
+        markDirty();
+        await persistNow(true);
+        await refreshWorkspaceList();
+
+        const counts = transferCounts(plan);
+        const parts = [
+          counts.files ? `${counts.files} document${counts.files === 1 ? "" : "s"}` : null,
+          counts.folders ? `${counts.folders} folder${counts.folders === 1 ? "" : "s"}` : null,
+        ].filter(Boolean);
+        toast.success(`Moved ${parts.join(" and ")} to ${destination.name}`, { id: toastId });
+      } catch (error) {
+        toast.error("Move failed", {
+          id: toastId,
+          description: error instanceof Error ? error.message : undefined,
+        });
+      } finally {
+        setMoving(false);
+        setPendingMove(null);
+      }
+    },
+    [
+      pendingMove,
+      folders,
+      saved,
+      highlights,
+      persistNow,
+      markDirty,
+      refreshWorkspaceList,
+      setHighlights,
+    ],
   );
 
   const openEmbeddedArtifact = useCallback(
@@ -2544,6 +2839,25 @@ flowchart LR
   // Settings is a dialog over the reader rather than a page of its own, so the
   // document stays visible behind it and closing it returns you to exactly what
   // you were reading. `/settings` stays a real route so the deep link still
+  /**
+   * Destination picker for a cross-workspace move.
+   *
+   * Rendered alongside the other dialogs rather than inside the sidebar: the
+   * sidebar is unmounted on a phone once the drawer closes, and the move must
+   * survive that — it is the reader's documents in flight.
+   */
+  const moveDialog = (
+    <MoveToWorkspaceDialog
+      open={pendingMove !== null}
+      summary={pendingMoveSummary}
+      workspaces={workspaces}
+      currentWorkspaceId={workspaceId}
+      busy={moving}
+      onCancel={() => setPendingMove(null)}
+      onConfirm={(destinationId) => void moveToWorkspace(destinationId)}
+    />
+  );
+
   // works — it just opens the dialog on top. Rendered from both the empty state
   // and the reader, so that link resolves even before any document is open.
   const settingsDialog = showSettings ? (
@@ -2574,12 +2888,24 @@ flowchart LR
         onSetTheme={setTheme}
         readingMode={readingMode}
         onSetReadingMode={setReadingMode}
+        mathRenderer={mathRenderer}
+        onSetMathRenderer={setMathRenderer}
+        mathNumbering={mathNumbering}
+        onSetMathNumbering={setMathNumbering}
+        mathExplorer={mathExplorer}
+        onSetMathExplorer={setMathExplorer}
         readingFont={readingFont}
         onSetReadingFont={setReadingFont}
         googleFont={googleFont}
         onSetGoogleFont={setGoogleFont}
         diagramColors={diagramColors}
         onSetDiagramColors={setDiagramColors}
+        diagramCamera={diagramCamera}
+        onSetDiagramCamera={setDiagramCamera}
+        diagramFollowNumbers={diagramFollowNumbers}
+        onSetDiagramFollowNumbers={setDiagramFollowNumbers}
+        diagramNumbers={diagramNumbers}
+        onSetDiagramNumbers={setDiagramNumbers}
         aiEnabled={aiEnabled}
         onSetAiEnabled={setAiEnabled}
         onRestoreFromBin={restoreFromBin}
@@ -2673,6 +2999,7 @@ flowchart LR
         {dragOverlay}
         {shareDialog}
         {settingsDialog}
+        {moveDialog}
       </div>
     );
   }
@@ -2721,6 +3048,8 @@ flowchart LR
                 onAddFiles={() => inputRef.current?.click()}
                 onRemoveFile={moveToBin}
                 onDownloadFile={downloadFile}
+                onDownloadFiles={downloadFiles}
+                onMoveToWorkspace={workspaces.length > 1 ? setPendingMove : undefined}
                 onShareFile={shareFile}
                 onShareFiles={(ids) => void shareFiles(ids)}
                 onRenameFile={renameFile}
@@ -2853,6 +3182,8 @@ flowchart LR
                     onAddFiles={() => inputRef.current?.click()}
                     onRemoveFile={moveToBin}
                     onDownloadFile={downloadFile}
+                    onDownloadFiles={downloadFiles}
+                onMoveToWorkspace={workspaces.length > 1 ? setPendingMove : undefined}
                     onShareFile={shareFile}
                     onShareFiles={(ids) => void shareFiles(ids)}
                     onRenameFile={renameFile}
@@ -3033,6 +3364,15 @@ flowchart LR
                                   startInEditFileId={
                                     pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
                                   }
+                                  mathPreferences={mathPreferences}
+                                  // Only the focused pane may honour an edit
+                                  // request. `autoEditFileId` is a bare file id,
+                                  // and the same document can sit in more than
+                                  // one pane — every pane holding it would match
+                                  // and drop into its editor at once.
+                                  startInEditFileId={
+                                    pane.id === paneLayout.focusedPaneId ? autoEditFileId : null
+                                  }
                                   onStartInEditConsumed={consumeStartInEdit}
                                   // Only the pane showing the document a jump
                                   // names is told about it.
@@ -3097,6 +3437,7 @@ flowchart LR
                   onShareFile={shareActiveFile}
                   onAskAi={aiEnabled ? askAiFromSelection : undefined}
                   readingMode={readingMode}
+                  mathPreferences={mathPreferences}
                   workspaceId={workspaceId}
                   workspaceRevision={workspaceRevision}
                   workspaceFiles={files}
@@ -3154,6 +3495,7 @@ flowchart LR
         )}
 
         {settingsDialog}
+        {moveDialog}
 
         {dragOverlay}
         {shareDialog}

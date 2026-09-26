@@ -41,3 +41,6 @@ graphify-out/
 .env.*
 !.env.example
 !.env.*.example
+
+# Rust build output (the shipped .wasm is copied into src/lib/diagram-engine)
+engine/*/target/

@@ -9,6 +9,8 @@
 // All IndexedDB access is funnelled through this module so UI components never
 // touch the database directly.
 
+import type { MathRendererType } from "./math/types";
+
 export interface PersistedFile {
   id: string;
   name: string;
@@ -518,6 +520,20 @@ export interface Prefs {
    */
   diagramColors: boolean;
   /**
+   * Let Stepped diagrams move the camera: close in on the part being drawn,
+   * glide between parts, and pull back to the whole at the end. Off keeps the
+   * whole diagram framed throughout. Reduced-motion system settings also hold
+   * it still, whatever this says.
+   */
+  diagramCamera: boolean;
+  /**
+   * Stepped diagrams play arrows the author numbered (`A -->|1| B`) in that
+   * order first. Off walks every diagram in the automatic order.
+   */
+  diagramFollowNumbers: boolean;
+  /** Stepped diagrams show each arrow's step number on it as it is drawn. */
+  diagramNumbers: boolean;
+  /**
    * Whether the AI features exist at all.
    *
    * Off hides every AI surface — the Ask AI panel and its sidebar entry, the
@@ -542,12 +558,32 @@ export interface Prefs {
    * makes the "google" choice inert until they do.
    */
   googleFont: string | null;
+  /**
+   * Which engine typesets math.
+   *
+   * "auto" is KaTeX with a MathJax fallback for what KaTeX cannot draw, and is
+   * right for nearly everyone. "mathjax" forces the high-coverage engine for a
+   * document full of exotic LaTeX; "temml" renders to MathML, which some screen
+   * readers navigate better than KaTeX's HTML. See `src/lib/math/renderer.ts`.
+   */
+  mathRenderer: MathRendererType;
+  /** Number display equations and resolve `\ref`/`\eqref` against them. */
+  mathNumbering: boolean;
+  /**
+   * MathJax's accessibility explorer: keyboard navigation of an expression's
+   * sub-tree, with each part spoken. Loads a speech-rule engine on first use,
+   * so it is opt-in.
+   */
+  mathExplorer: boolean;
 }
 
 const PREFS_KEY = "localdox:prefs";
 const DEFAULT_PREFS: Prefs = {
   theme: "dark",
   diagramColors: true,
+  diagramCamera: true,
+  diagramFollowNumbers: true,
+  diagramNumbers: true,
   aiEnabled: true,
   lastWorkspaceId: null,
   name: null,
@@ -555,6 +591,9 @@ const DEFAULT_PREFS: Prefs = {
   readingMode: "paginated",
   readingFont: "hyperlegible",
   googleFont: null,
+  mathRenderer: "auto",
+  mathNumbering: true,
+  mathExplorer: false,
 };
 
 export function loadPrefs(): Prefs {

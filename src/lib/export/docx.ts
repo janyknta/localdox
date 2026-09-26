@@ -1,0 +1,682 @@
+/**
+ * Export blocks → a real Word document.
+ *
+ * Written as OOXML directly rather than through a document library. Two
+ * reasons, both about what the reader ends up with. First: the libraries that
+ * build `.docx` are 300–500 kB of JavaScript that every reader of every
+ * document would download to open the app, for a feature most of them use
+ * rarely — and this app already treats a lazy import as the default (see the
+ * markdown plugin loader). Second, and decisive: none of them embed an image
+ * the way this needs, which is the only reason the export exists. The XML for
+ * the subset of Word a markdown document maps onto is small enough to write
+ * once and read later, so it is written here.
+ *
+ * The output is a valid OPC package — `[Content_Types].xml`, the two relation
+ * parts, a styles part and the document body — which Word, Pages, LibreOffice
+ * and Google Docs all open without a repair prompt.
+ */
+
+import JSZip from "jszip";
+import type { ExportBlock, InlineRun, ListItem } from "./markdown-ast";
+import { columnWidthDemand, parseMarkdownBlocks, runsToText } from "./markdown-ast";
+import { rasterizeAll, type RasterDiagram } from "./diagram-raster";
+
+/** Word measures lengths in twentieths of a point. */
+const TWIP = 20;
+/** …and image extents in English Metric Units: 914 400 to the inch. */
+const EMU_PER_PX = 9525;
+
+/** Letter-width page with one-inch margins leaves this much for content. */
+const CONTENT_WIDTH_PX = 6.5 * 96;
+
+const HEADING_SIZES = [32, 26, 22, 19, 17, 16]; // half-points, h1…h6
+
+function escapeXml(value: string): string {
+  return (
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;")
+      // Word rejects the whole package - not the character, the package - on a
+      // stray control character, and text pasted from a terminal easily carries
+      // one. XML 1.0 allows only tab, newline and carriage return below 0x20,
+      // so the rest of that range is dropped.
+      //
+      // Keep these as escapes, never literal characters: `eslint --fix` has
+      // rewritten this class into raw control bytes once already, which look
+      // like ordinary whitespace in a diff while silently matching nothing.
+      // eslint-disable-next-line no-control-regex -- matching control characters is the point
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+  );
+}
+
+/**
+ * One run of text.
+ *
+ * `xml:space="preserve"` on every run, because Word collapses leading and
+ * trailing whitespace otherwise and inline formatting boundaries ("a **b** c")
+ * lose the spaces around the emphasised word.
+ */
+function runXml(run: InlineRun, relationships: RelationshipTable, fontSize?: number): string {
+  const props: string[] = [];
+  if (run.bold) props.push("<w:b/>");
+  if (run.italic) props.push("<w:i/>");
+  if (run.strike) props.push("<w:strike/>");
+  if (run.code) {
+    props.push('<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>');
+    // A code span inside a shrunken table follows the table down rather than
+    // staying at its usual size and blowing the row height back out.
+    props.push(`<w:sz w:val="${fontSize ? Math.max(12, fontSize - 3) : 19}"/>`);
+    props.push('<w:shd w:val="clear" w:fill="F1F1EF"/>');
+  } else if (fontSize) {
+    props.push(`<w:sz w:val="${fontSize}"/>`);
+  }
+  if (run.href) {
+    props.push('<w:color w:val="1A5FB4"/>');
+    props.push('<w:u w:val="single"/>');
+  }
+  const rPr = props.length ? `<w:rPr>${props.join("")}</w:rPr>` : "";
+  const text = `<w:r>${rPr}<w:t xml:space="preserve">${escapeXml(run.text)}</w:t></w:r>`;
+  if (!run.href) return text;
+  const id = relationships.hyperlink(run.href);
+  return `<w:hyperlink r:id="${id}">${text}</w:hyperlink>`;
+}
+
+function runsXml(runs: InlineRun[], relationships: RelationshipTable, fontSize?: number): string {
+  return runs.map((run) => runXml(run, relationships, fontSize)).join("");
+}
+
+interface ParagraphOptions {
+  style?: string;
+  /** Left indent in twips. */
+  indent?: number;
+  spacingBefore?: number;
+  spacingAfter?: number;
+  numbering?: { id: number; level: number };
+  border?: "left" | "bottom";
+  shade?: string;
+  keepNext?: boolean;
+  align?: "center";
+  /**
+   * Half-points for the paragraph mark.
+   *
+   * Only sets the mark; the runs inside carry their own size (see `runsXml`).
+   * Without it an empty line in a shrunken table still reserves full-height
+   * leading, which shows up as a too-tall row.
+   */
+  fontSize?: number;
+}
+
+/**
+ * One paragraph.
+ *
+ * `w:pPr`'s children are a *sequence* in the schema, not a set: Word is
+ * forgiving about it but LibreOffice and the stricter validators are not, and
+ * `w:rPr` in particular must come last. The pushes below are therefore in
+ * schema order and should stay that way.
+ */
+function paragraphXml(inner: string, options: ParagraphOptions = {}): string {
+  const props: string[] = [];
+  if (options.style) props.push(`<w:pStyle w:val="${options.style}"/>`);
+  if (options.keepNext) props.push("<w:keepNext/>");
+  if (options.numbering)
+    props.push(
+      `<w:numPr><w:ilvl w:val="${options.numbering.level}"/><w:numId w:val="${options.numbering.id}"/></w:numPr>`,
+    );
+  if (options.border === "left")
+    props.push('<w:pBdr><w:left w:val="single" w:sz="18" w:space="8" w:color="C8C6C0"/></w:pBdr>');
+  if (options.border === "bottom")
+    props.push('<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="D4D2CC"/></w:pBdr>');
+  if (options.shade) props.push(`<w:shd w:val="clear" w:fill="${options.shade}"/>`);
+  props.push(
+    `<w:spacing w:before="${options.spacingBefore ?? 0}" w:after="${options.spacingAfter ?? 120}"/>`,
+  );
+  if (options.indent) props.push(`<w:ind w:left="${options.indent}"/>`);
+  if (options.align) props.push(`<w:jc w:val="${options.align}"/>`);
+  if (options.fontSize) props.push(`<w:rPr><w:sz w:val="${options.fontSize}"/></w:rPr>`);
+  return `<w:p><w:pPr>${props.join("")}</w:pPr>${inner}</w:p>`;
+}
+
+/**
+ * Relationship ids and the parts they point at.
+ *
+ * Images and hyperlinks are both relationships from the document part, so they
+ * share one counter. Image bytes are collected alongside so the packer can
+ * write the media folder without a second pass over the blocks.
+ */
+class RelationshipTable {
+  private next = 1;
+  readonly entries: string[] = [];
+  readonly media = new Map<string, Uint8Array>();
+
+  private id(): string {
+    return `rId${this.next++}`;
+  }
+
+  hyperlink(target: string): string {
+    const id = this.id();
+    this.entries.push(
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${escapeXml(target)}" TargetMode="External"/>`,
+    );
+    return id;
+  }
+
+  image(bytes: Uint8Array, extension: string): string {
+    const id = this.id();
+    const name = `image${this.media.size + 1}.${extension}`;
+    this.media.set(name, bytes);
+    this.entries.push(
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${name}"/>`,
+    );
+    return id;
+  }
+}
+
+/** A floating-free inline picture, scaled to fit the text column. */
+function imageXml(
+  relationshipId: string,
+  pixelWidth: number,
+  pixelHeight: number,
+  description: string,
+  docPrId: number,
+): string {
+  const scale = Math.min(1, CONTENT_WIDTH_PX / pixelWidth);
+  const cx = Math.round(pixelWidth * scale * EMU_PER_PX);
+  const cy = Math.round(pixelHeight * scale * EMU_PER_PX);
+  const name = escapeXml(description || "Diagram");
+  return (
+    `<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0">` +
+    `<wp:extent cx="${cx}" cy="${cy}"/>` +
+    `<wp:docPr id="${docPrId}" name="Picture ${docPrId}" descr="${name}"/>` +
+    `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+    `<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:nvPicPr><pic:cNvPr id="${docPrId}" name="${name}"/><pic:cNvPicPr/></pic:nvPicPr>` +
+    `<pic:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+    `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
+    `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
+    `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`
+  );
+}
+
+function tableCellXml(inner: string, widthPct: number, header: boolean): string {
+  const shade = header ? '<w:shd w:val="clear" w:fill="F1F1EF"/>' : "";
+  return (
+    `<w:tc><w:tcPr><w:tcW w:w="${widthPct}" w:type="pct"/>${shade}` +
+    `<w:tcMar><w:top w:w="60" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/>` +
+    `<w:left w:w="80" w:type="dxa"/><w:right w:w="80" w:type="dxa"/></w:tcMar>` +
+    `<w:vAlign w:val="center"/></w:tcPr>${inner}</w:tc>`
+  );
+}
+
+/**
+ * How a table is going to be fitted onto the page.
+ *
+ * Word does not shrink a table to fit. Given more columns than the text column
+ * has room for, it keeps the columns and wraps every cell — an eight-column
+ * table in a 6.5" column gets 0.8" per column, which is two or three characters
+ * a line and a row twelve lines tall. The table is technically present and
+ * genuinely unreadable.
+ *
+ * So the width is decided here, before any XML is written, from what the table
+ * actually contains.
+ */
+interface TableLayout {
+  /** Half-points. Smaller type buys real column width on a dense table. */
+  fontSize: number;
+  /** Turn the page sideways for this table alone. */
+  landscape: boolean;
+  /** Per-column share of the table width, in fiftieths of a percent. */
+  widths: number[];
+}
+
+/** Columns past which the portrait text column stops being usable. */
+const LANDSCAPE_THRESHOLD = 7;
+
+/**
+ * Choose widths, type size and orientation for one table.
+ *
+ * Columns are sized in proportion to what they hold rather than split evenly:
+ * a "Notes" column of sentences and a "Qty" column of two digits given the same
+ * width wastes half the page on the digits and shreds the sentences. Each
+ * column's share is clamped so neither extreme runs away — no column narrower
+ * than about four characters, none wider than 40% of the table.
+ */
+function planTable(header: InlineRun[][], rows: InlineRun[][][]): TableLayout {
+  const columns = Math.max(1, header.length);
+
+  const demands = header.map((cell, index) =>
+    columnWidthDemand(
+      cell,
+      rows.map((row) => row[index] ?? []),
+    ),
+  );
+  const total = demands.reduce((sum, demand) => sum + demand, 0) || columns;
+
+  // Fiftieths of a percent — `w:type="pct"` counts to 5000, not 100.
+  const MIN_SHARE = Math.min(Math.floor(5000 / columns / 2), 250);
+  const MAX_SHARE = 2000;
+  const raw = demands.map((demand) =>
+    Math.min(MAX_SHARE, Math.max(MIN_SHARE, Math.round((demand / total) * 5000))),
+  );
+  // Clamping breaks the sum; put the difference back proportionally so the
+  // table still fills its declared width exactly.
+  const rawTotal = raw.reduce((sum, share) => sum + share, 0);
+  const widths = raw.map((share) => Math.round((share / rawTotal) * 5000));
+
+  // Landscape is a real page-layout change and is worth it only when portrait
+  // genuinely cannot hold the table. Past seven columns it cannot.
+  const landscape = columns > LANDSCAPE_THRESHOLD;
+
+  // Type size falls with density. Landscape buys back about 40% more width, so
+  // a table only just over the threshold does not also need to shrink.
+  const effectiveColumns = landscape ? columns * 0.7 : columns;
+  const fontSize =
+    effectiveColumns > 9 ? 14 : effectiveColumns > 6 ? 16 : effectiveColumns > 4 ? 18 : 20;
+
+  return { fontSize, landscape, widths };
+}
+
+/**
+ * Section properties for one page orientation.
+ *
+ * Orientation in OOXML belongs to a section, never to a table, and a `sectPr`
+ * carried on a paragraph describes the section that *ends* at that paragraph —
+ * not the one that begins. So turning a single table sideways means three
+ * sections: everything before it (closed by a portrait `sectPr`), the table
+ * alone (closed by a landscape one), and the rest of the document, which is
+ * closed by the body-level `sectPr` that was always there.
+ *
+ * The break is a page break rather than continuous, because it has to be: a
+ * page cannot be portrait at the top and landscape at the bottom, and Word
+ * silently ignores a continuous break that changes page size.
+ */
+function sectionProperties(landscape: boolean): string {
+  const width = Math.round((landscape ? 11 : 8.5) * 72 * TWIP);
+  const height = Math.round((landscape ? 8.5 : 11) * 72 * TWIP);
+  const orient = landscape ? ' w:orient="landscape"' : "";
+  // Tighter margins in landscape: the point of turning the page is width, and
+  // 1" on each side gives a third of it back.
+  const margin = landscape ? 1080 : 1440;
+  return (
+    `<w:sectPr><w:pgSz w:w="${width}" w:h="${height}"${orient}/>` +
+    `<w:pgMar w:top="${margin}" w:right="${margin}" w:bottom="${margin}" w:left="${margin}"` +
+    ` w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`
+  );
+}
+
+/** An empty paragraph whose only job is to close a section. */
+function sectionBreak(landscape: boolean): string {
+  return `<w:p><w:pPr>${sectionProperties(landscape)}</w:pPr></w:p>`;
+}
+
+function tableXml(
+  header: InlineRun[][],
+  rows: InlineRun[][][],
+  relationships: RelationshipTable,
+): string {
+  const layout = planTable(header, rows);
+  const borders =
+    "<w:tblBorders>" +
+    ["top", "left", "bottom", "right", "insideH", "insideV"]
+      .map((side) => `<w:${side} w:val="single" w:sz="4" w:space="0" w:color="D4D2CC"/>`)
+      .join("") +
+    "</w:tblBorders>";
+
+  /** Table type is set per run; the document default would be too large. */
+  const sized = (runs: InlineRun[], bold: boolean) =>
+    runs.map((run) => ({ ...run, ...(bold ? { bold: true } : {}) }));
+
+  const cellXml = (runs: InlineRun[], index: number, isHeader: boolean) =>
+    tableCellXml(
+      paragraphXml(runsXml(sized(runs, isHeader), relationships, layout.fontSize), {
+        spacingAfter: 0,
+        fontSize: layout.fontSize,
+      }),
+      layout.widths[index] ?? Math.floor(5000 / Math.max(1, header.length)),
+      isHeader,
+    );
+
+  const headerCells = header.map((cell, index) => cellXml(cell, index, true)).join("");
+
+  // `tblHeader` repeats the header row when the table breaks across pages —
+  // without it a long table's later pages are unreadable columns of values.
+  // `cantSplit` keeps an individual row whole rather than tearing a wrapped
+  // cell in half across the fold.
+  const headerRow = `<w:tr><w:trPr><w:tblHeader/><w:cantSplit/></w:trPr>${headerCells}</w:tr>`;
+
+  const bodyRows = rows
+    .map(
+      (row) =>
+        `<w:tr><w:trPr><w:cantSplit/></w:trPr>` +
+        `${row.map((cell, index) => cellXml(cell, index, false)).join("")}</w:tr>`,
+    )
+    .join("");
+
+  // `tblLayout fixed` makes Word honour the widths computed above. Left on
+  // `autofit`, Word re-measures the content and undoes the whole plan.
+  const table =
+    `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/>` +
+    `<w:tblW w:w="5000" w:type="pct"/><w:tblLayout w:type="fixed"/>${borders}</w:tblPr>` +
+    `${headerRow}${bodyRows}</w:tbl>` +
+    // Word merges two adjacent tables into one; an empty paragraph between a
+    // table and whatever follows also stops the next block from butting
+    // straight against the border.
+    paragraphXml("", { spacingAfter: 0 });
+
+  if (!layout.landscape) return table;
+
+  // Close the portrait run that precedes the table, then close the table's own
+  // section as landscape. What follows belongs to the next section, which the
+  // body-level `sectPr` closes as portrait again.
+  return sectionBreak(false) + table + sectionBreak(true);
+}
+
+function listXml(items: ListItem[], relationships: RelationshipTable): string {
+  return items
+    .map((item) => {
+      // A task item carries its state as a box, since Word has no checkbox in
+      // a plain numbering definition and the state is the point of the item.
+      const prefix: InlineRun[] =
+        item.checked === undefined ? [] : [{ text: item.checked ? "☑ " : "☐ " }];
+      return paragraphXml(runsXml([...prefix, ...item.runs], relationships), {
+        // The item's own marker, not the list's: bulleted detail nested under
+        // a numbered step stays bulleted.
+        numbering: { id: item.ordered ? 2 : 1, level: Math.min(item.depth, 4) },
+        spacingAfter: 60,
+      });
+    })
+    .join("");
+}
+
+function codeXml(text: string, relationships: RelationshipTable): string {
+  // One paragraph per line, shaded and monospaced. A single paragraph with
+  // breaks would work in Word but loses the per-line shading everywhere else.
+  const lines = text.replace(/\n+$/, "").split("\n");
+  return lines
+    .map((line, index) =>
+      paragraphXml(runsXml([{ text: line || " ", code: true }], relationships), {
+        shade: "F5F4F1",
+        indent: 120,
+        spacingBefore: index === 0 ? 120 : 0,
+        spacingAfter: index === lines.length - 1 ? 120 : 0,
+      }),
+    )
+    .join("");
+}
+
+interface WriteContext {
+  relationships: RelationshipTable;
+  diagrams: Map<string, RasterDiagram>;
+  /** Monotonic id for drawing elements; Word requires them to be distinct. */
+  nextDrawingId: () => number;
+}
+
+function blockXml(block: ExportBlock, context: WriteContext, indent = 0, quoted = false): string {
+  const { relationships } = context;
+  // Inside a blockquote every paragraph carries the rule, so a quote spanning
+  // several paragraphs reads as one quoted passage rather than as a rule beside
+  // its first line only.
+  const quote = quoted ? { border: "left" as const } : {};
+  switch (block.type) {
+    case "heading": {
+      const level = Math.min(Math.max(block.level, 1), 6);
+      return paragraphXml(runsXml(block.runs, relationships), {
+        style: `Heading${level}`,
+        indent,
+        keepNext: true,
+        spacingBefore: level <= 2 ? 320 : 240,
+        spacingAfter: 120,
+        ...(level === 1 && !quoted ? { border: "bottom" as const } : quote),
+      });
+    }
+    case "paragraph":
+      return paragraphXml(runsXml(block.runs, relationships), {
+        indent,
+        spacingAfter: 140,
+        ...quote,
+      });
+    case "list":
+      return listXml(block.items, relationships);
+    case "code":
+      return codeXml(block.text, relationships);
+    case "math":
+      // Word's own equation format is a different grammar again; the LaTeX is
+      // preserved verbatim so nothing is lost and the reader can paste it into
+      // Word's equation editor, which accepts LaTeX input directly.
+      return codeXml(block.tex, relationships);
+    case "mermaid": {
+      const raster = context.diagrams.get(block.code);
+      if (!raster) {
+        // Render failed. The source is better than an empty space, and saying
+        // so stops the reader assuming the export dropped something silently.
+        return (
+          paragraphXml(
+            runsXml(
+              [{ text: "Diagram (source shown; could not be rendered)", italic: true }],
+              relationships,
+            ),
+            { spacingAfter: 60 },
+          ) + codeXml(block.code, relationships)
+        );
+      }
+      const id = relationships.image(raster.png, "png");
+      return paragraphXml(
+        imageXml(id, raster.width / 2, raster.height / 2, "Diagram", context.nextDrawingId()),
+        { align: "center", spacingBefore: 160, spacingAfter: 200 },
+      );
+    }
+    case "quote":
+      return block.blocks.map((inner) => blockXml(inner, context, indent + 360, true)).join("");
+    case "table":
+      return tableXml(block.header, block.rows, relationships);
+    case "rule":
+      return paragraphXml("", { border: "bottom", spacingBefore: 120, spacingAfter: 200 });
+    case "image": {
+      // Only data URLs can be embedded; a remote image would need a fetch that
+      // may be cross-origin and may not resolve at all offline, so it is
+      // carried as its alt text and link instead of failing the export.
+      const dataUrl = /^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/i.exec(block.src);
+      if (!dataUrl) {
+        return paragraphXml(
+          runsXml([{ text: block.alt || block.src, href: block.src }], relationships),
+          { align: "center" },
+        );
+      }
+      const bytes = base64ToBytes(dataUrl[2]);
+      const extension = dataUrl[1].toLowerCase() === "jpg" ? "jpeg" : dataUrl[1].toLowerCase();
+      const id = relationships.image(bytes, extension);
+      // Intrinsic size is unknown without decoding; the column width is the
+      // safe assumption and matches how the viewer lays images out.
+      return paragraphXml(
+        imageXml(id, CONTENT_WIDTH_PX, CONTENT_WIDTH_PX * 0.6, block.alt, context.nextDrawingId()),
+        { align: "center", spacingBefore: 160, spacingAfter: 200 },
+      );
+    }
+  }
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+const CONTENT_TYPES = (extensions: string[]) =>
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+${extensions.map((extension) => `<Default Extension="${extension}" ContentType="image/${extension}"/>`).join("\n")}
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+</Types>`;
+
+const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rIdDoc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+<Relationship Id="rIdCore" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+</Relationships>`;
+
+/**
+ * Styles.
+ *
+ * Heading styles are declared rather than applied as direct formatting so the
+ * export lands in Word's navigation pane, generates a table of contents, and
+ * respects a theme the recipient applies. A document that is one long run of
+ * bold paragraphs is not a Word document.
+ */
+const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr>
+<w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/>
+<w:sz w:val="22"/><w:szCs w:val="22"/>
+</w:rPr></w:rPrDefault>
+<w:pPrDefault><w:pPr><w:spacing w:after="120" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+</w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+${HEADING_SIZES.map(
+  (size, index) => `<w:style w:type="paragraph" w:styleId="Heading${index + 1}">
+<w:name w:val="heading ${index + 1}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/>
+<w:qFormat/><w:pPr><w:outlineLvl w:val="${index}"/></w:pPr>
+<w:rPr><w:b/><w:sz w:val="${size}"/><w:color w:val="1A1A18"/></w:rPr></w:style>`,
+).join("\n")}
+<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/>
+<w:qFormat/><w:rPr><w:b/><w:sz w:val="52"/></w:rPr></w:style>
+<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/>
+<w:tblPr><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:bottom w:w="60" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
+</w:styles>`;
+
+const BULLET_GLYPHS = ["•", "◦", "▪", "•", "◦"];
+const ORDERED_FORMATS = ["decimal", "lowerLetter", "lowerRoman", "decimal", "lowerLetter"];
+
+/** Five levels of one list definition — Word requires each `ilvl` to exist. */
+function numberingLevels(ordered: boolean): string {
+  return BULLET_GLYPHS.map((glyph, level) => {
+    const format = ordered ? ORDERED_FORMATS[level] : "bullet";
+    const text = ordered ? `%${level + 1}.` : glyph;
+    const font = ordered
+      ? ""
+      : '<w:rPr><w:rFonts w:ascii="Segoe UI Symbol" w:hAnsi="Segoe UI Symbol"/></w:rPr>';
+    return (
+      `<w:lvl w:ilvl="${level}"><w:start w:val="1"/><w:numFmt w:val="${format}"/>` +
+      `<w:lvlText w:val="${text}"/><w:lvlJc w:val="left"/>` +
+      `<w:pPr><w:ind w:left="${(level + 1) * 360}" w:hanging="360"/></w:pPr>${font}</w:lvl>`
+    );
+  }).join("");
+}
+
+/** Two numbering definitions: bullets (numId 1) and decimals (numId 2). */
+const NUMBERING = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:abstractNum w:abstractNumId="1"><w:multiLevelType w:val="hybridMultilevel"/>${numberingLevels(false)}</w:abstractNum>
+<w:abstractNum w:abstractNumId="2"><w:multiLevelType w:val="hybridMultilevel"/>${numberingLevels(true)}</w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>
+<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>
+</w:numbering>`;
+
+function coreProperties(title: string): string {
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+ xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:title>${escapeXml(title)}</dc:title>
+<dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`;
+}
+
+export interface DocxOptions {
+  /** Document title; also the Word document property and the fallback H1. */
+  title: string;
+  /**
+   * Put the title at the top of the first page. Off when the markdown already
+   * opens with its own H1, so the name is not printed twice.
+   */
+  includeTitle?: boolean;
+}
+
+/**
+ * Build a `.docx` from markdown source.
+ *
+ * Diagrams are rendered before any XML is written: the writer needs the bitmap
+ * dimensions to lay a picture out, and rendering is async while XML assembly
+ * is not.
+ */
+export async function markdownToDocx(source: string, options: DocxOptions): Promise<Blob> {
+  const blocks = parseMarkdownBlocks(source);
+  const diagrams = await rasterizeAll(
+    blocks.flatMap((block) => (block.type === "mermaid" ? [block.code] : [])),
+  );
+
+  const relationships = new RelationshipTable();
+  let drawingId = 1;
+  const context: WriteContext = { relationships, diagrams, nextDrawingId: () => drawingId++ };
+
+  const opensWithHeading = blocks[0]?.type === "heading" && blocks[0].level === 1;
+  const titleXml =
+    options.includeTitle !== false && !opensWithHeading
+      ? paragraphXml(runsXml([{ text: options.title }], relationships), {
+          style: "Title",
+          spacingAfter: 320,
+        })
+      : "";
+
+  const body = blocks.map((block) => blockXml(block, context)).join("");
+
+  // Letter, one-inch margins, and the last child of the body. This closes the
+  // final section — whatever follows the last wide table, or the whole document
+  // when it has none.
+  const section = sectionProperties(false);
+
+  const document = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+ xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+<w:body>${titleXml}${body}${section}</w:body></w:document>`;
+
+  const documentRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+<Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+${relationships.entries.join("\n")}
+</Relationships>`;
+
+  const extensions = [
+    ...new Set([...relationships.media.keys()].map((name) => name.split(".").pop()!)),
+  ];
+
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", CONTENT_TYPES(extensions));
+  zip.file("_rels/.rels", ROOT_RELS);
+  zip.file("docProps/core.xml", coreProperties(options.title));
+  zip.file("word/document.xml", document);
+  zip.file("word/styles.xml", STYLES);
+  zip.file("word/numbering.xml", NUMBERING);
+  zip.file("word/_rels/document.xml.rels", documentRels);
+  for (const [name, bytes] of relationships.media) zip.file(`word/media/${name}`, bytes);
+
+  return zip.generateAsync({
+    type: "blob",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    compression: "DEFLATE",
+    // PNG is already compressed; spending level 9 on it doubles the export time
+    // for no size win, while the XML parts compress well at any level.
+    compressionOptions: { level: 6 },
+  });
+}
+
+/** First heading of the document, for naming an export the file cannot name. */
+export function inferTitle(source: string, fallback: string): string {
+  const blocks = parseMarkdownBlocks(source);
+  const heading = blocks.find((block) => block.type === "heading");
+  return heading && heading.type === "heading" ? runsToText(heading.runs) : fallback;
+}

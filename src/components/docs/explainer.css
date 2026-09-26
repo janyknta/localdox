@@ -119,17 +119,77 @@
 
 /*
  * Edge drawing is driven frame-by-frame from JS via stroke-dashoffset, so the
- * path itself carries no transition — a CSS transition would fight the scrubber
- * and make stepping backwards animate forwards.
+ * dash offset carries no transition: one would fight the scrubber and make
+ * stepping backwards animate forwards. Opacity is a different matter, because
+ * the spotlight below cross-fades it.
  */
-.explainer-stage[data-explainer] path.flowchart-link {
-  transition: none;
+.explainer-stage[data-explainer] .explainer-edge {
+  transition: opacity 480ms ease;
 }
 
-/* The camera. Panning the viewBox per-frame is smooth on its own; this is only
-   for the discrete jump back to the home framing on restart. */
-.explainer-stage[data-explainer-camera] svg {
-  transition: none;
+/*
+ * The spotlight.
+ *
+ * While a beat is being explained, everything already covered recedes and the
+ * beat itself stays at full strength, the way a presenter's pointer makes the
+ * rest of the slide background. The player marks only the current beat's
+ * elements (`explainer-focus`); the dimming is this one rule, so moving from
+ * beat to beat touches a handful of elements, not the whole diagram.
+ *
+ * A node's own opacity is the player's reveal fade, so the dim goes on its
+ * *children*, and the two multiply instead of overwriting each other.
+ */
+.explainer-stage[data-explainer] .explainer-node > *,
+.explainer-stage[data-explainer] .explainer-label > * {
+  transition: opacity 480ms ease;
+}
+
+.explainer-stage[data-explainer-spotlight] .explainer-node:not(.explainer-focus) > *,
+.explainer-stage[data-explainer-spotlight] .explainer-label:not(.explainer-focus) > * {
+  opacity: 0.32;
+}
+
+.explainer-stage[data-explainer-spotlight] .explainer-edge:not(.explainer-focus) {
+  opacity: 0.24;
+}
+
+/*
+ * The subject of the beat gets a soft halo in the accent colour. A filter
+ * rather than a stroke or a scale, for the same reason the reveal is a fade:
+ * it cannot move or reshape anything Mermaid laid out.
+ */
+.explainer-stage[data-explainer-spotlight] .explainer-node.explainer-focus.explainer-shown {
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--primary) 55%, transparent));
+}
+
+/*
+ * Step numbers: a small pill on each arrow, in the accent colour, that
+ * appears as the stroke passes it. It follows the spotlight like its edge.
+ */
+.explainer-stage[data-explainer] .explainer-badge {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-out;
+}
+
+.explainer-stage[data-explainer] .explainer-badge.explainer-badge-shown {
+  opacity: 1;
+}
+
+.explainer-stage[data-explainer-spotlight] .explainer-badge.explainer-badge-shown:not(.explainer-focus) {
+  opacity: 0.4;
+}
+
+.explainer-stage .explainer-badge rect {
+  fill: var(--primary);
+  stroke: var(--background);
+  stroke-width: 1.5;
+}
+
+.explainer-stage .explainer-badge text {
+  fill: var(--primary-foreground);
+  font: 600 10px ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -141,4 +201,28 @@
   .explainer-stage[data-explainer] .explainer-node.explainer-pulse {
     animation: none;
   }
+
+  .explainer-caption {
+    animation: none;
+  }
+}
+
+/*
+ * The caption changes once per beat. It slides in from below, like a subtitle
+ * line changing, so the reader notices a new idea has started without the
+ * text simply blinking over.
+ */
+@keyframes explainer-caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.explainer-caption {
+  animation: explainer-caption-in 360ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }

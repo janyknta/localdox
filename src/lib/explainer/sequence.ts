@@ -133,7 +133,7 @@ export function readSequence(svg: SVGSVGElement): ExplainerGraph | null {
   });
 
   if (edges.length === 0) return null;
-  return { nodes, edges, clusters: [], svg, baseView };
+  return { nodes, edges, clusters: [], svg, baseView, sequence: true };
 }
 
 /**

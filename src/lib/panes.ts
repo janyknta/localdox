@@ -151,6 +151,33 @@ export function closeTab(layout: PaneLayout, paneId: string, fileId: string): Pa
   return { panes, focusedPaneId };
 }
 
+/**
+ * Close a set of documents wherever they are open.
+ *
+ * For documents that have stopped existing in this workspace — binned, or moved
+ * out to another one. A pane left holding a tab whose file is gone renders an
+ * empty column the reader cannot close by any obvious means, so the layout has
+ * to be told, and the same file can be open in several panes at once.
+ *
+ * Built on `closeTab` rather than filtering the tab arrays directly so the
+ * fiddly parts — which tab becomes active when the closed one was active, a
+ * pane that empties collapsing, focus following a collapsed pane — stay defined
+ * in exactly one place.
+ */
+export function closeFileEverywhere(layout: PaneLayout, fileIds: readonly string[]): PaneLayout {
+  const closing = new Set(fileIds);
+  if (closing.size === 0) return layout;
+  let next = layout;
+  for (const fileId of closing) {
+    // Re-read the panes each time: closing a tab can collapse a pane, so the
+    // list from the previous iteration may name one that no longer exists.
+    for (const pane of next.panes.filter((candidate) => candidate.tabs.includes(fileId))) {
+      next = closeTab(next, pane.id, fileId);
+    }
+  }
+  return next;
+}
+
 /** Split: a new pane beside `paneId`, showing `fileId`. */
 export function splitPane(layout: PaneLayout, paneId: string, fileId: string | null): PaneLayout {
   const index = layout.panes.findIndex((p) => p.id === paneId);

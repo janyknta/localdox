@@ -32,7 +32,7 @@ export function MarkdownToolbar({ onAction }: { onAction: (action: FormatAction)
       // Scrolls rather than wraps on a narrow screen: a toolbar that reflows to
       // two rows moves every button the moment the window changes, and the
       // reader loses the muscle memory that made it worth having.
-      className="flex items-center gap-0.5 overflow-x-auto px-1 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="flex items-center gap-0.5 overflow-x-auto px-1 py-1 [scrollbar-none] [&::-webkit-scrollbar]:hidden"
     >
       {TOOLBAR_GROUPS.map((group, index) => (
         <div key={index} className="flex items-center gap-0.5">

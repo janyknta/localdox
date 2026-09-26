@@ -31,6 +31,7 @@ import {
   fileLabel,
   getDocumentKind,
   googleUrl,
+  DISCARD_PROMPT,
 } from "@/lib/document-utils";
 import { buildMindMap } from "@/lib/mindmap";
 import { JsonTree } from "./JsonTree";
@@ -142,7 +143,7 @@ function MermaidFileViewer({
   useEffect(() => {
     originalContentRef.current = file.content;
     setEditing(false);
-    // Content echoes from autosave must not replace the cancellation snapshot.
+    // Content echoes from the parent must not replace the snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file.id]);
 
@@ -152,7 +153,17 @@ function MermaidFileViewer({
     onStartInEditConsumed?.();
   }, [editing, file.id, onStartInEditConsumed, startInEditFileId]);
 
-  useNavEscape(editing, () => setEditing(false), ESCAPE_DEPTH.mode);
+  // Leaving discards — nothing is written until Done — so a draft that differs
+  // from the file asks first. The editor owns the draft text, so the snapshot
+  // taken on entry is what this can compare against.
+  useNavEscape(
+    editing,
+    () => {
+      if (file.content !== originalContentRef.current && !window.confirm(DISCARD_PROMPT)) return;
+      setEditing(false);
+    },
+    ESCAPE_DEPTH.mode,
+  );
 
   return (
     <ViewerFrame
@@ -177,17 +188,20 @@ function MermaidFileViewer({
         <div className="mx-auto max-w-5xl px-4 py-6 md:px-8">
           <div className="mb-4 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-xs leading-relaxed text-muted-foreground">
             Add a YAML <code>flow:</code> block before the Mermaid source to choreograph routes,
-            waits, parallel packets, and node states. Changes save automatically.
+            waits, parallel packets, and node states. Done saves, Cancel discards.
           </div>
           <MarkdownEditor
             initialContent={file.content}
             fileId={file.id}
-            onSave={(content) => onContentChange?.(file.id, content)}
-            onDone={() => setEditing(false)}
-            onCancel={() => {
-              onContentChange?.(file.id, originalContentRef.current);
+            // The editor reports the document the text was typed into, so a
+            // commit that lands after a file switch still goes to the right
+            // file. `undefined` content means the draft never changed.
+            onDone={(fileId, content) => {
+              if (content !== undefined) onContentChange?.(fileId, content);
               setEditing(false);
             }}
+            // Nothing was written, so cancelling only leaves.
+            onCancel={() => setEditing(false)}
           />
         </div>
       ) : (
@@ -354,22 +368,42 @@ function HtmlFileViewer({
             </button>
           </div>
         ) : (
+          editing ? (
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="inline-flex h-8 items-center rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={commitEdit}
+              className="inline-flex h-8 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+              title="Save and stop editing"
+            >
+              Done
+            </button>
+          </div>
+        ) : (
           <button
-            type="button"
-            onClick={() => setShowSource((on) => !on)}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            aria-pressed={showSource}
-          >
-            {showSource ? (
-              <>
-                <Eye className="h-3.5 w-3.5" /> Preview
-              </>
-            ) : (
-              <>
-                <Code2 className="h-3.5 w-3.5" /> Source
-              </>
-            )}
-          </button>
+              type="button"
+              onClick={() => setShowSource((on) => !on)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              aria-pressed={showSource}
+            >
+              {showSource ? (
+                <>
+                  <Eye className="h-3.5 w-3.5" /> Preview
+                </>
+              ) : (
+                <>
+                  <Code2 className="h-3.5 w-3.5" /> Source
+                </>
+              )}
+            </button>
+        )
         )
       }
     >
@@ -973,9 +1007,6 @@ function SpreadsheetViewer({
   );
 }
 
-/** How long typing has to pause before a JSON draft is handed to the parent. */
-const JSON_AUTOSAVE_MS = 600;
-
 function JsonViewer({
   file,
   isBookmarked,
@@ -1010,8 +1041,8 @@ function JsonViewer({
     }
   }, [file.content]);
 
-  // The draft is re-seeded per document rather than per content change, so the
-  // parent echoing an autosave back doesn't clobber what's been typed since.
+  // The draft is re-seeded per document rather than per content change, so a
+  // content echo from the parent doesn't clobber what's been typed since.
   useEffect(() => {
     setDraft(file.content);
     setEditing(false);
@@ -1029,21 +1060,14 @@ function JsonViewer({
     }
   }, [draft, editing]);
 
-  const onContentChangeRef = useRef(onContentChange);
-  onContentChangeRef.current = onContentChange;
-
-  // Autosave, matching the markdown editor: only valid JSON is written back, so
-  // a document is never persisted in a half-typed state.
-  useEffect(() => {
-    if (!editing || draft === file.content) return;
-    try {
-      JSON.parse(draft);
-    } catch {
-      return;
-    }
-    const timer = setTimeout(() => onContentChangeRef.current?.(file.id, draft), JSON_AUTOSAVE_MS);
-    return () => clearTimeout(timer);
-  }, [draft, editing, file.content, file.id]);
+  // Commit and leave, matching the markdown editor: nothing is written until
+  // the reader presses Done. Invalid JSON can't be committed at all, so a
+  // document is never persisted in a half-typed state.
+  const commitEdit = () => {
+    if (draftError) return;
+    if (draft !== file.content) onContentChange?.(file.id, draft);
+    setEditing(false);
+  };
 
   const beginEdit = () => {
     setDraft(formatted);
@@ -1053,6 +1077,7 @@ function JsonViewer({
     setMode("tree");
   };
 
+  // Discard: the draft was never written, so dropping it is the whole job.
   const cancelEdit = () => {
     setDraft(file.content);
     setEditing(false);
@@ -1070,7 +1095,14 @@ function JsonViewer({
   // Back leaves the editor and the mind map, the same as their own exit
   // controls do — a mode you entered is the last thing you did, so it is the
   // first thing back should undo.
-  useNavEscape(editing, cancelEdit, ESCAPE_DEPTH.mode);
+  //
+  // Leaving discards, so a draft with real changes in it asks first. Nothing is
+  // written on the way out: Done is the only path that saves.
+  const escapeEdit = () => {
+    if (draft !== file.content && !window.confirm(DISCARD_PROMPT)) return;
+    cancelEdit();
+  };
+  useNavEscape(editing, escapeEdit, ESCAPE_DEPTH.mode);
   useNavEscape(!editing && mode === "mindmap", () => setMode("tree"), ESCAPE_DEPTH.mode);
 
   const applyFormat = () => {
@@ -1153,10 +1185,20 @@ function JsonViewer({
             <button
               type="button"
               onClick={cancelEdit}
-              title="Stop editing"
-              className="flex h-8 w-8 items-center justify-center rounded-md bg-accent text-foreground"
+              className="flex h-8 items-center rounded-md border border-border px-2.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              <Pencil className="h-4 w-4" />
+              Cancel
+            </button>
+            {/* The only write path. Disabled on a draft that isn't valid JSON —
+                the inline error below says why. */}
+            <button
+              type="button"
+              onClick={commitEdit}
+              disabled={Boolean(draftError)}
+              title={draftError ? "Fix the JSON before saving" : "Save and stop editing"}
+              className="flex h-8 items-center rounded-md bg-foreground px-2.5 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              Done · Save
             </button>
           </div>
         ) : null
@@ -1194,7 +1236,7 @@ function JsonViewer({
                 className={`mt-2 text-xs ${draftError ? "text-destructive" : "text-muted-foreground"}`}
                 role={draftError ? "alert" : undefined}
               >
-                {draftError ?? "Valid JSON — changes save automatically."}
+                {draftError ?? "Valid JSON — Done saves, Cancel discards."}
               </p>
             </div>
           ) : parsed ? (

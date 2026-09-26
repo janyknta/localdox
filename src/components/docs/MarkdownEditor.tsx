@@ -13,6 +13,8 @@ import type { FormatAction } from "@/lib/markdown-format";
 import { TOOLBAR_ITEMS } from "@/lib/markdown-toolbar-items";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 
+const AUTOSAVE_MS = 600;
+
 /**
  * The markdown source editor.
  *
@@ -75,9 +77,6 @@ interface Props {
    */
   onRename?: (name: string) => void;
 }
-
-/** How long typing has to pause before the draft is handed to the parent. */
-const AUTOSAVE_MS = 500;
 
 function MarkdownEditorImpl(
   {

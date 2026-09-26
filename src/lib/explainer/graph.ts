@@ -52,9 +52,37 @@ export interface ExplainerEdge {
   label: SVGGElement | null;
   /** Path length in user units; drives draw duration. */
   length: number;
+  /** The label's text, which may carry an author's step number (`1. Login`). */
+  text?: string;
 }
 
-export interface ExplainerGraph {
+/**
+ * What planning and camera framing actually need: positions and topology.
+ *
+ * The SVG explainer's graph (below) carries element handles on top of this; the
+ * GPU engine (lib/diagram-engine) builds one straight from its own layout, with
+ * no DOM at all. Keeping the planner and the camera on this narrower type is
+ * what lets both renderers share one idea of the order and the framing.
+ */
+export interface GraphShapeNode {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface GraphShape {
+  nodes: Map<string, GraphShapeNode>;
+  /** `text` is the edge's label, which may carry an author's step number. */
+  edges: { id: string; source: string; target: string; length: number; text?: string }[];
+  baseView: { x: number; y: number; width: number; height: number };
+  /** A sequence diagram plays in emitted order instead of by traversal. */
+  sequence?: boolean;
+}
+
+export interface ExplainerGraph extends GraphShape {
   nodes: Map<string, ExplainerNode>;
   edges: ExplainerEdge[];
   /** Subgraph boxes, for camera framing. */
@@ -382,6 +410,7 @@ export function readGraph(svg: SVGSVGElement): ExplainerGraph | null {
       target: target.id,
       path,
       label: labelGroups[index] ?? null,
+      text: labelGroups[index]?.textContent?.trim() || undefined,
       length,
     });
   });

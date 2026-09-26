@@ -33,6 +33,7 @@ import {
   FolderInput,
   FilePlus,
   Download,
+  Printer,
   Upload,
   CheckSquare,
   Share2,
@@ -52,8 +53,18 @@ import { savedTypeLabel, type SavedEntry, type SavedItem } from "@/lib/saved-ite
 import type { MdFile, DocumentKind } from "@/lib/markdown-utils";
 import { readingMinutes } from "@/lib/markdown-utils";
 import { fileLabel, getDocumentKind, isEditableKind } from "@/lib/document-utils";
+import { availableFormats, FORMAT_LABEL, type ExportFormat } from "@/lib/export";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { useNavHistory } from "@/hooks/use-nav-history";
+
+/** A glyph per export format, so the flyout scans by shape like the file list. */
+const FORMAT_ICON: Record<ExportFormat, LucideIcon> = {
+  docx: FileType,
+  pdf: Printer,
+  markdown: FileText,
+  html: Globe,
+  original: Download,
+};
 
 // Arc-style "favicon" per file type — a small colored glyph that anchors each
 // row so the list scans by shape, not just text.
@@ -266,7 +277,7 @@ interface Props {
   currentWorkspaceId?: string | null;
   onSwitchWorkspace?: (id: string) => void;
   onDeleteWorkspace?: (id: string) => void;
-  onDownloadFile?: (id: string) => void;
+  onDownloadFile?: (id: string, format: ExportFormat) => void;
   /** Copy a link to one file. The recipient chooses where it lands. */
   onShareFile?: (id: string) => void;
   /** Copy a link to the multi-select batch. */
@@ -549,6 +560,8 @@ function SidebarImpl({
         else if (draggedFolder && draggedFolder !== folderId) {
           onMoveFolderToFolder?.(draggedFolder, folderId);
         }
+        setDraggingFileId(null);
+        setDraggingFolderId(null);
       },
     };
   };
@@ -845,7 +858,10 @@ function SidebarImpl({
               }
               onAddToSplit={onAddToSplit ? () => onAddToSplit(file.id) : undefined}
               alreadyInSplit={splitFileIds.includes(file.id)}
-              onDownload={onDownloadFile ? () => onDownloadFile(file.id) : undefined}
+              onDownload={
+                onDownloadFile ? (format) => onDownloadFile(file.id, format) : undefined
+              }
+              formats={availableFormats(file)}
               onShare={onShareFile ? () => onShareFile(file.id) : undefined}
               reordering={reordering}
               onToggleReorder={canReorder ? toggleReorder : undefined}
@@ -873,7 +889,12 @@ function SidebarImpl({
               onDownload={
                 onDownloadFile
                   ? () => {
-                      selectedIds.forEach((id) => onDownloadFile(id));
+                      // A multi-file download stays the original bytes. The
+                      // converted formats are per-document by nature — a batch
+                      // of PDFs would mean one print dialog per file, each
+                      // waiting on the last, and the reader picking a format
+                      // once for documents that may not all support it.
+                      selectedIds.forEach((id) => onDownloadFile(id, "original"));
                       setSelecting(false);
                       setSelectedIds(new Set());
                     }
@@ -1254,6 +1275,7 @@ function FileMenu({
   onAddToSplit,
   alreadyInSplit,
   onDownload,
+  formats = ["original"],
   onShare,
   reordering,
   onToggleReorder,
@@ -1275,7 +1297,17 @@ function FileMenu({
   folders?: SidebarFolder[];
   currentFolderId?: string | null;
   onMoveToFolder?: (folderId: string | null) => void;
-  onDownload?: () => void;
+  /**
+   * Write the document out in one of the offered formats.
+   *
+   * A format rather than a bare "download", because Word and PDF are the two
+   * ways a document actually leaves this app and get the same reach as handing
+   * back the original bytes did. `formats` says which ones this document can
+   * produce — a spreadsheet the app only reads has no markdown to convert, so
+   * it offers the original alone rather than three items that would fail.
+   */
+  onDownload?: (format: ExportFormat) => void;
+  formats?: ExportFormat[];
   onShare?: () => void;
   reordering?: boolean;
   onToggleReorder?: () => void;
@@ -1472,17 +1504,23 @@ function FileMenu({
               }}
             />
           )}
-          {onDownload && (
-            <MenuItem
-              icon={Download}
-              label="Download"
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                onDownload();
-              }}
-            />
-          )}
+          {/* One row per format rather than a single "Download" that always
+              produced the source file. Word and PDF are what a document is
+              usually wanted as; the original stays last for the cases where the
+              bytes themselves are the point. */}
+          {onDownload &&
+            formats.map((format) => (
+              <MenuItem
+                key={format}
+                icon={FORMAT_ICON[format]}
+                label={FORMAT_LABEL[format]}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  onDownload(format);
+                }}
+              />
+            ))}
         </MenuFlyout>
       )}
     </div>

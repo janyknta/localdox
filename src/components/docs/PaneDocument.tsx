@@ -4,6 +4,7 @@ import { getDocumentKind } from "@/lib/document-utils";
 import type { Highlight } from "@/lib/dom-highlighter";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
+import type { MathPreferences } from "@/lib/math/types";
 import type { SavedDraft, SavedItem } from "@/lib/saved-items";
 
 const EMPTY_HIGHLIGHTS: Highlight[] = [];
@@ -47,6 +48,7 @@ export function PaneDocument({
   onRemoveSaved,
   onOpenArtifact,
   readingMode,
+  mathPreferences,
   startInEditFileId,
   onStartInEditConsumed,
   activeSubtopicId = null,
@@ -71,6 +73,7 @@ export function PaneDocument({
   onRemoveSaved: (id: string) => void;
   onOpenArtifact?: (fileId: string, workspaceId: string) => void;
   readingMode: ReadingMode;
+  mathPreferences?: MathPreferences;
   startInEditFileId?: string | null;
   onStartInEditConsumed?: () => void;
   /**
@@ -166,6 +169,7 @@ export function PaneDocument({
       onToggleSaved={toggleSaved}
       onRemoveSaved={onRemoveSaved}
       readingMode={readingMode}
+      mathPreferences={mathPreferences}
       workspaceId={workspaceId}
       workspaceRevision={workspaceRevision}
       workspaceFiles={files}

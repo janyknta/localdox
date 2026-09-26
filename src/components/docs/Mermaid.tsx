@@ -1,4 +1,13 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Download, Expand, LoaderCircle, Minimize2, Minus, Plus, Star } from "lucide-react";
 import { toast } from "sonner";
 import type { MermaidAnimator as MermaidAnimatorInstance } from "mermaid-animator";
@@ -6,6 +15,8 @@ import { useSaveAction } from "./save-action";
 import { describeRenderError } from "./render-error";
 import { largeDiagramMermaidConfig } from "./mermaid-config";
 import { renderMermaid } from "./mermaid-render-cache";
+import { useSvgViewport } from "./use-svg-viewport";
+import { isZoomWheel, wheelZoomFactor } from "@/lib/viewport";
 import { DiagramNodeColorPopover } from "./DiagramNodeColorPopover";
 import {
   COLORABLE_NODES,
@@ -23,6 +34,7 @@ import {
   readSvgViewBox,
   shouldUseDiagramPerformanceMode,
 } from "./mermaid-performance";
+import { diagramKind, shouldUseGpuEngine } from "@/lib/diagram-engine/gate";
 import {
   MAX_STAGE_RATIO,
   MIN_STAGE_RATIO,
@@ -46,6 +58,11 @@ function widthCap(ratio: number): string | undefined {
  */
 const MermaidExplainer = lazy(() =>
   import("./MermaidExplainer").then((m) => ({ default: m.MermaidExplainer })),
+);
+
+/** The GPU engine's raw stage, for large flowcharts only; see lib/diagram-engine. */
+const LargeDiagramStage = lazy(() =>
+  import("./LargeDiagramStage").then((m) => ({ default: m.LargeDiagramStage })),
 );
 
 /**
@@ -193,10 +210,6 @@ export function Mermaid({
   mode?: MermaidMode;
 }) {
   const [fullscreen, setFullscreen] = useState(false);
-  // Raw mode draws a plain SVG with no pan/zoom handler behind it — the
-  // animated stages get theirs from the animator. Scaling the host box is the
-  // equivalent that works for a static diagram, inline and fullscreen alike.
-  const [rawZoom, setRawZoom] = useState(1);
   const [mode, setMode] = useState<MermaidMode>(initialMode);
   const [dark, setDark] = useState(
     () => typeof document !== "undefined" && document.documentElement.classList.contains("dark"),
@@ -209,6 +222,8 @@ export function Mermaid({
       typeof document === "undefined" ||
       document.documentElement.getAttribute("data-diagram-colors") !== "off",
   );
+  const camera = useCameraPreference();
+  const { followNumbers, showNumbers } = useStepPreferences();
   const [renderError, setRenderError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // Measured by the inline stage; the frame needs it too, to narrow with a tall
@@ -229,12 +244,34 @@ export function Mermaid({
   const handleOversized = useCallback(() => setRenderTooLarge(true), []);
   // A new diagram deserves a fresh verdict; the old one's may not apply.
   useEffect(() => setRenderTooLarge(false), [source]);
-  const performanceMode = sourceTooLarge || renderTooLarge;
+  /**
+   * A large flowchart goes to the GPU engine (Rust/WASM layout, WebGL drawing)
+   * instead of being flattened to an image. It stays live in Raw and Stepped;
+   * only Flow, the packet animator, remains off at this size.
+   */
+  const gpuKind = useMemo(() => diagramKind(source), [source]);
+  // Also when Mermaid's own render turned out too big for live SVG: a large
+  // ER or class diagram goes to the engine instead of to a still image.
+  const gpu =
+    useMemo(() => shouldUseGpuEngine(source), [source]) || (renderTooLarge && gpuKind !== null);
+  const performanceMode = !gpu && (sourceTooLarge || renderTooLarge);
   const [performanceImageUrl, setPerformanceImageUrl] = useState<string | null>(null);
   const handlePerformanceImage = useCallback((url: string | null) => {
     setPerformanceImageUrl(url);
   }, []);
   const frameCap = stageRatio ? (widthCap(stageRatio) ?? null) : null;
+  /**
+   * One callback for the stage's measured proportions, whatever the framing.
+   *
+   * It used to be `setStageRatio` inline and `undefined` in full screen, and
+   * every stage lists it as an effect dependency — so entering or leaving full
+   * screen re-ran each stage's render effect and laid the diagram out again.
+   * The full-screen stage's measurement is simply ignored instead.
+   */
+  const fullscreenRef = useRef(false);
+  const reportRatio = useCallback((ratio: number) => {
+    if (!fullscreenRef.current) setStageRatio(ratio);
+  }, []);
 
   /**
    * A diagram with no sequence to walk — a sequence diagram, a timeline, an
@@ -269,11 +306,6 @@ export function Mermaid({
   // fresh render attempt rather than staying stuck on the previous failure.
   useEffect(() => setRenderError(null), [source, dark, mode]);
 
-  // A zoom belongs to the diagram it was applied to. Leaving it set across an
-  // edit or a mode switch would re-open the next render already magnified, with
-  // no indication why.
-  useEffect(() => setRawZoom(1), [source, mode]);
-
   // Full screen is the frame's own, through the Fullscreen API, rather than an
   // overlay painted over the page. An overlay is only ever as large as the
   // viewport the browser chrome leaves behind, and a diagram is exactly the
@@ -284,7 +316,11 @@ export function Mermaid({
   // control, and the flag has to agree either way.
   const frameRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === frameRef.current);
+    const sync = () => {
+      const on = document.fullscreenElement === frameRef.current;
+      fullscreenRef.current = on;
+      setFullscreen(on);
+    };
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
@@ -357,35 +393,21 @@ export function Mermaid({
         stepped: "Disabled for very large diagrams to keep rendering responsive",
         flow: "Disabled for very large diagrams to protect device performance",
       }
-    : steppedUnavailable
-      ? { stepped: "This diagram has no sequence to step through" }
-      : undefined;
+    : gpu
+      ? { flow: "Disabled for very large diagrams to protect device performance" }
+      : steppedUnavailable
+        ? { stepped: "This diagram has no sequence to step through" }
+        : undefined;
 
-  const visibleMode = performanceMode ? "raw" : mode;
+  const visibleMode = performanceMode || (gpu && mode === "flow") ? "raw" : mode;
   const modeControl = <ModeTabs mode={visibleMode} onChange={setMode} unavailable={unavailable} />;
-
-  // Kept inside the same bounds the animated stages use, so a diagram cannot be
-  // zoomed into a state the other modes could not show.
-  const rawZoomBy = (factor: number) =>
-    setRawZoom((z) => Math.min(ZOOM_LIMIT.max, Math.max(ZOOM_LIMIT.min, z * factor)));
-  const rawZoomControls = (
-    <>
-      <TrayButton onClick={() => rawZoomBy(1 / 1.3)} label="Zoom out">
-        <Minus className="h-3.5 w-3.5" />
-      </TrayButton>
-      <TrayButton onClick={() => setRawZoom(1)} label="Fit diagram">
-        <span className="text-[10px] font-semibold tabular-nums">{Math.round(rawZoom * 100)}%</span>
-      </TrayButton>
-      <TrayButton onClick={() => rawZoomBy(1.3)} label="Zoom in">
-        <Plus className="h-3.5 w-3.5" />
-      </TrayButton>
-    </>
-  );
 
   // An unsupported diagram still has to show something: render it raw while
   // leaving the reader's chosen tab alone.
   const effectiveMode: MermaidMode =
-    performanceMode || (mode === "stepped" && steppedUnavailable) ? "raw" : mode;
+    performanceMode || (mode === "stepped" && steppedUnavailable) || (gpu && mode === "flow")
+      ? "raw"
+      : mode;
 
   /**
    * The bar above the diagram: what mode you are in, and what you can do to the
@@ -417,10 +439,6 @@ export function Mermaid({
       <Tray>
         {saveControl}
         {effectiveMode === "flow" ? downloadControl : null}
-        {/* Raw is the one mode with no pan/zoom handler of its own, so it gets
-            these. The animated stages carry their own pair down on the
-            artwork. */}
-        {effectiveMode === "raw" ? rawZoomControls : null}
         <TrayButton
           onClick={toggleFullscreen}
           label={fullscreen ? "Exit full screen" : "Fullscreen"}
@@ -442,11 +460,27 @@ export function Mermaid({
             code={source}
             dark={dark}
             colored={colored}
+            camera={camera}
+            followNumbers={followNumbers}
+            showNumbers={showNumbers}
             fill={stageFill}
             controls={controls}
             onError={setRenderError}
-            onRatio={stageFill ? undefined : setStageRatio}
+            onRatio={reportRatio}
             onUnsupported={handleUnsupported}
+          />
+        </Suspense>
+      );
+    }
+    if (effectiveMode === "raw" && gpu) {
+      return (
+        <Suspense fallback={<StageSpinner label="Loading large diagram…" />}>
+          <LargeDiagramStage
+            code={source}
+            dark={dark}
+            fill={stageFill}
+            onError={setRenderError}
+            onRatio={reportRatio}
           />
         </Suspense>
       );
@@ -459,9 +493,8 @@ export function Mermaid({
           colored={colored && !performanceMode}
           fill={stageFill}
           controls={controls}
-          zoom={rawZoom}
           onError={setRenderError}
-          onRatio={stageFill ? undefined : setStageRatio}
+          onRatio={reportRatio}
           performanceMode={performanceMode}
           onPerformanceImage={handlePerformanceImage}
           onOversized={handleOversized}
@@ -475,7 +508,7 @@ export function Mermaid({
         fill={stageFill}
         controls={controls}
         onError={setRenderError}
-        onRatio={stageFill ? undefined : setStageRatio}
+        onRatio={reportRatio}
       />
     );
   };
@@ -504,22 +537,24 @@ export function Mermaid({
             once; with the frame itself going full screen there is only ever one
             diagram mounted, so nothing has to be swapped out or measured to
             stop the surrounding text from jumping. */}
+        {/* The stage keeps one place in the tree in and out of full screen:
+            the wrapper only changes class (and is `display: contents` inline),
+            so React keeps the same stage instance — its render, its layout and
+            the explainer's position — instead of mounting a fresh one. */}
         {renderError ? (
           <MermaidError error={renderError} />
-        ) : fullscreen ? (
-          <div className="min-h-0 flex-1">
-            {performanceMode ? (
+        ) : (
+          <div className={fullscreen ? "min-h-0 flex-1" : "contents"}>
+            {fullscreen && performanceMode ? (
               performanceImageUrl ? (
                 <PerformanceDiagramImage src={performanceImageUrl} name={baseName(name)} fill />
               ) : (
                 <StageSpinner label="Preparing large diagram…" />
               )
             ) : (
-              stageFor(true)
+              stageFor(fullscreen)
             )}
           </div>
-        ) : (
-          stageFor(false)
         )}
       </div>
     </>
@@ -543,19 +578,124 @@ const TRAY_GUTTER = 56;
 
 const ZOOM_LIMIT = { min: 0.2, max: 8 };
 
-/** Zoom through the animator's own PanZoom handler.
+function cameraAllowed(): boolean {
+  if (typeof document === "undefined") return true;
+  const reduced =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  return !reduced && document.documentElement.getAttribute("data-diagram-camera") !== "off";
+}
+
+interface StepPreferences {
+  /** Play the author's numbered arrows in their order. */
+  followNumbers: boolean;
+  /** Show each arrow's step number on it. */
+  showNumbers: boolean;
+}
+
+function stepPreferences(): StepPreferences {
+  if (typeof document === "undefined") return { followNumbers: true, showNumbers: true };
+  const root = document.documentElement;
+  return {
+    followNumbers: root.getAttribute("data-diagram-order") !== "auto",
+    showNumbers: root.getAttribute("data-diagram-numbers") !== "off",
+  };
+}
+
+/** Step order and numbering, published on <html> like the camera setting. */
+function useStepPreferences(): StepPreferences {
+  const [prefs, setPrefs] = useState(stepPreferences);
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const next = stepPreferences();
+      setPrefs((current) =>
+        current.followNumbers === next.followNumbers && current.showNumbers === next.showNumbers
+          ? current
+          : next,
+      );
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-diagram-order", "data-diagram-numbers"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return prefs;
+}
+
+/**
+ * Whether Stepped may move its camera: the reader's setting (published on
+ * <html> as `data-diagram-camera`, like the colour preference) and the
+ * system's reduced-motion request, which always wins.
+ */
+function useCameraPreference(): boolean {
+  const [allowed, setAllowed] = useState(cameraAllowed);
+  useEffect(() => {
+    const sync = () => setAllowed(cameraAllowed());
+    const observer = new MutationObserver(sync);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-diagram-camera"],
+    });
+    const motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    motion?.addEventListener("change", sync);
+    return () => {
+      observer.disconnect();
+      motion?.removeEventListener("change", sync);
+    };
+  }, []);
+  return allowed;
+}
+
+/**
+ * − / level / + for any stage driven by an `SvgViewport`.
  *
- *  Writing the SVG viewBox directly looks equivalent but desynchronises the
- *  package: PanZoomHandler seeds a private `viewBox` field once at construction
- *  and never re-reads the DOM, so its pan handler would resume from the
- *  pre-zoom framing and overwrite the attribute on the first drag — the zoom
- *  visibly snapped back. That instance is private, but the package's own
- *  KeyboardHandler is wired to it and listens on the container, so "+"/"-"
- *  reach zoomIn()/zoomOut() and keep cache and DOM in step. */
-function zoomStage(container: HTMLElement | null, direction: "in" | "out") {
-  if (!container) return;
-  container.dispatchEvent(
-    new KeyboardEvent("keydown", { key: direction === "in" ? "+" : "-", bubbles: false }),
+ * The middle button resets. While the explainer camera is in charge it reads
+ * "Auto" rather than a percentage, because the level is the camera's and is
+ * changing under it. Once the reader zooms by hand it shows their level, and
+ * pressing it hands the view back.
+ */
+export function ZoomControls({
+  zoom,
+  manual,
+  auto,
+  onZoomIn,
+  onZoomOut,
+  onReset,
+}: {
+  zoom: number;
+  manual: boolean;
+  /** The camera is framing the view, so "reset" means "follow it again". */
+  auto?: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onReset: () => void;
+}) {
+  const following = auto && !manual;
+  return (
+    <Tray>
+      <TrayButton onClick={onZoomOut} label="Zoom out">
+        <Minus className="h-3.5 w-3.5" />
+      </TrayButton>
+      <TrayButton
+        onClick={onReset}
+        label={auto ? "Follow the explanation" : "Fit diagram"}
+        title={
+          following
+            ? "The camera is following the explanation. Drag, scroll or pinch to look around yourself."
+            : auto
+              ? "Hand the view back to the camera (0)"
+              : "Fit diagram (0)"
+        }
+      >
+        <span className="text-[10px] font-semibold tabular-nums">
+          {following ? "Auto" : `${Math.round(zoom * 100)}%`}
+        </span>
+      </TrayButton>
+      <TrayButton onClick={onZoomIn} label="Zoom in">
+        <Plus className="h-3.5 w-3.5" />
+      </TrayButton>
+    </Tray>
   );
 }
 
@@ -582,6 +722,7 @@ function AnimatorStage({
   const ownerGenerationRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [ratio, setRatio] = useState<number | null>(null);
+  const { state: view, attach, detach, zoomIn, zoomOut, reset } = useSvgViewport();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -593,9 +734,11 @@ function AnimatorStage({
     const create = async () => {
       const options = {
         theme: dark ? "dark" : "light",
-        pan: true,
-        // Wheel zoom hijacked the page scroll: scrolling past a diagram zoomed it
-        // instead of moving on. Zoom is deliberate now — the tray's + and −.
+        // Pan and zoom are ours (lib/viewport.ts), shared with the other two
+        // stages. The package's handler captured the pointer on press, which
+        // retargeted clicks and fought the inspector, and its wheel zoom
+        // hijacked the page scroll.
+        pan: false,
         zoom: false,
         inspect: true,
         minZoom: ZOOM_LIMIT.min,
@@ -627,6 +770,7 @@ function AnimatorStage({
         const view = svg?.viewBox.baseVal;
         if (svg && view?.width && view.height) {
           svg.dataset.maBaseView = `${view.x} ${view.y} ${view.width} ${view.height}`;
+          attach(container, svg, { minZoom: ZOOM_LIMIT.min, maxZoom: ZOOM_LIMIT.max });
           const measured = Math.min(
             MAX_STAGE_RATIO,
             Math.max(MIN_STAGE_RATIO, view.height / view.width),
@@ -654,6 +798,7 @@ function AnimatorStage({
     return () => {
       disposed = true;
       if (ownerGenerationRef.current === generation) {
+        detach();
         animatorRef.current?.destroy();
         animatorRef.current = null;
         ownerGenerationRef.current = 0;
@@ -664,15 +809,15 @@ function AnimatorStage({
     // destroy the animator and lay the whole diagram out again — twice per
     // toggle, since closing did it too. Framing is applied by the effect below
     // instead, against the instance that is already running.
-  }, [code, dark, onError, onRatio]);
+  }, [code, dark, onError, onRatio, attach, detach]);
 
-  // Re-frame an existing animator when the stage changes shape. Cheap: it
-  // writes a viewBox, where a re-create would re-run Mermaid's layout.
+  // Re-frame when the stage changes shape (entering or leaving full screen).
+  // Cheap: it writes a viewBox, where a re-create would re-run Mermaid's layout.
   useEffect(() => {
-    if (!fill || loading) return;
-    const frame = requestAnimationFrame(() => animatorRef.current?.fitToView());
+    if (loading) return;
+    const frame = requestAnimationFrame(reset);
     return () => cancelAnimationFrame(frame);
-  }, [fill, loading]);
+  }, [fill, loading, reset]);
 
   return (
     <div
@@ -691,14 +836,13 @@ function AnimatorStage({
             : "opacity-0 transition-opacity duration-150 group-hover/stage:opacity-100 group-focus-within/stage:opacity-100 [@media(hover:none)]:opacity-100"
         }`}
       >
-        <Tray>
-          <TrayButton onClick={() => zoomStage(containerRef.current, "out")} label="Zoom out">
-            <Minus className="h-3.5 w-3.5" />
-          </TrayButton>
-          <TrayButton onClick={() => zoomStage(containerRef.current, "in")} label="Zoom in">
-            <Plus className="h-3.5 w-3.5" />
-          </TrayButton>
-        </Tray>
+        <ZoomControls
+          zoom={view.zoom}
+          manual={view.manual}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onReset={reset}
+        />
         {controls}
       </div>
       {loading && (
@@ -709,7 +853,7 @@ function AnimatorStage({
       <div
         ref={containerRef}
         tabIndex={0}
-        aria-label="Animated Mermaid diagram"
+        aria-label="Animated Mermaid diagram. Drag to pan; pinch or Ctrl/⌘ + scroll to zoom; + − 0 on the keyboard."
         // Keep the package class in React's declared className. The animator
         // also adds it imperatively, but a later loading-state render would
         // otherwise make React restore only the utility classes.
@@ -788,7 +932,6 @@ function StaticStage({
   colored,
   fill,
   controls,
-  zoom = 1,
   onError,
   onRatio,
   performanceMode,
@@ -801,8 +944,6 @@ function StaticStage({
   colored?: boolean;
   fill?: boolean;
   controls?: React.ReactNode;
-  /** Scale factor from the tray's zoom controls; 1 is the fitted diagram. */
-  zoom?: number;
   onError: (message: string | null) => void;
   onRatio?: (ratio: number) => void;
   performanceMode?: boolean;
@@ -818,6 +959,7 @@ function StaticStage({
   const [loading, setLoading] = useState(true);
   const [ratio, setRatio] = useState<number | null>(null);
   const [size, setSize] = useState<DiagramSize | null>(null);
+  const { state: view, attach, detach, zoomIn, zoomOut, reset } = useSvgViewport();
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const imageUrlRef = useRef<string | null>(null);
   /**
@@ -970,6 +1112,13 @@ function StaticStage({
             setRatio(measured);
             setSize({ width: view.width, height: view.height });
             onRatio?.(measured);
+            // A tall diagram is scrolled by the page, so the wheel stays the
+            // page's even when zoomed; drag and pinch still work.
+            attach(host!, svgEl as SVGSVGElement, {
+              minZoom: ZOOM_LIMIT.min,
+              maxZoom: ZOOM_LIMIT.max,
+              wheelPan: !(!fill && isTallStage(measured)),
+            });
           }
         }
         setLoading(false);
@@ -982,12 +1131,19 @@ function StaticStage({
     void run();
     return () => {
       disposed = true;
+      detach();
       if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
       imageUrlRef.current = null;
       onPerformanceImage?.(null);
       if (host) host.innerHTML = "";
     };
+    // `fill` is read once, for the wheel rule, and deliberately not a
+    // dependency: entering full screen must not re-render the diagram.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, dark, colored, onError, onOversized, onPerformanceImage, onRatio, performanceMode]);
+
+  // A new framing (full screen, or back) starts from the whole diagram.
+  useEffect(() => reset(), [fill, reset]);
 
   if (asImage) {
     return (
@@ -1013,6 +1169,13 @@ function StaticStage({
             : "opacity-0 transition-opacity duration-150 group-hover/stage:opacity-100 group-focus-within/stage:opacity-100 [@media(hover:none)]:opacity-100"
         }`}
       >
+        <ZoomControls
+          zoom={view.zoom}
+          manual={view.manual}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onReset={reset}
+        />
         {/* Passed already grouped: the caller decides what shares a surface,
             because only it knows which controls belong to the live mode. */}
         {controls}
@@ -1022,26 +1185,20 @@ function StaticStage({
           <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> Rendering diagram…
         </div>
       )}
-      {/* Zoom scales the diagram inside a clipping box rather than growing the
-          stage, so a magnified diagram is panned to by scrolling this box and
-          the surrounding document never reflows. Transform, not width/height:
-          it stays on the compositor and does not restyle the SVG's nodes. */}
-      <div className={zoom > 1 ? "h-full w-full overflow-auto" : "contents"}>
-        <div
-          ref={hostRef}
-          onClick={onHostClick}
-          data-tall={!fill && ratio && isTallStage(ratio) ? "" : undefined}
-          className={`${fill ? "h-full min-h-0 w-full" : "w-full box-content"}${
-            colored ? " diagram-colored" : ""
-          }`}
-          style={{
-            ...(fill ? undefined : stageBoxStyle(ratio ?? 0.42, TRAY_GUTTER, size ?? undefined)),
-            ...(zoom === 1
-              ? undefined
-              : { transform: `scale(${zoom})`, transformOrigin: "top left" }),
-          }}
-        />
-      </div>
+      {/* Zoom and pan rewrite the SVG's viewBox (lib/viewport.ts), so the
+          stage never changes size, the document never reflows, and text stays
+          sharp at any magnification. */}
+      <div
+        ref={hostRef}
+        onClick={onHostClick}
+        tabIndex={0}
+        aria-label="Mermaid diagram. Drag to pan; pinch or Ctrl/⌘ + scroll to zoom; + − 0 on the keyboard."
+        data-tall={!fill && ratio && isTallStage(ratio) ? "" : undefined}
+        className={`overflow-hidden rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+          fill ? "h-full min-h-0 w-full" : "w-full box-content"
+        }${colored ? " diagram-colored" : ""}`}
+        style={fill ? undefined : stageBoxStyle(ratio ?? 0.42, TRAY_GUTTER, size ?? undefined)}
+      />
       {picker && (
         <DiagramNodeColorPopover
           anchor={picker.rect}
@@ -1069,13 +1226,102 @@ function PerformanceDiagramImage({
   fill?: boolean;
 }) {
   const [zoom, setZoom] = useState(1);
-  const zoomBy = (factor: number) => setZoom((value) => Math.min(32, Math.max(1, value * factor)));
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  /**
+   * The point to hold still through a zoom: a fraction of the content, and
+   * where it sat in the scroller. Without it, zoom grows from the top-left
+   * corner and whatever the reader was looking at slides away.
+   */
+  const anchorRef = useRef<{ fx: number; fy: number; ox: number; oy: number } | null>(null);
+  const zoomBy = useCallback((factor: number, clientX?: number, clientY?: number) => {
+    const scroller = scrollerRef.current;
+    if (scroller) {
+      const rect = scroller.getBoundingClientRect();
+      const ox = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+      const oy = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+      anchorRef.current = {
+        fx: (scroller.scrollLeft + ox) / (scroller.scrollWidth || 1),
+        fy: (scroller.scrollTop + oy) / (scroller.scrollHeight || 1),
+        ox,
+        oy,
+      };
+    }
+    setZoom((value) => Math.min(32, Math.max(1, value * factor)));
+  }, []);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    const anchor = anchorRef.current;
+    if (!scroller || !anchor) return;
+    anchorRef.current = null;
+    scroller.scrollLeft = anchor.fx * scroller.scrollWidth - anchor.ox;
+    scroller.scrollTop = anchor.fy * scroller.scrollHeight - anchor.oy;
+  }, [zoom]);
+
+  // Drag to pan (mouse, pen, touch alike) and pinch / Ctrl-wheel to zoom. The
+  // box already scrolls natively, so two-finger trackpad scrolling works as-is.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    let drag: { id: number; x: number; y: number } | null = null;
+    const onDown = (event: PointerEvent) => {
+      if (event.button !== 0 && event.button !== 1) return;
+      if (event.pointerType === "touch") return; // native touch scrolling is better
+      drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      scroller.setPointerCapture(event.pointerId);
+      scroller.style.cursor = "grabbing";
+      event.preventDefault();
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!drag || drag.id !== event.pointerId) return;
+      scroller.scrollLeft -= event.clientX - drag.x;
+      scroller.scrollTop -= event.clientY - drag.y;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+    };
+    const onUp = () => {
+      drag = null;
+      scroller.style.cursor = "";
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (!isZoomWheel(event)) return;
+      event.preventDefault();
+      zoomBy(wheelZoomFactor(event), event.clientX, event.clientY);
+    };
+    let gestureScale = 1;
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureScale = 1;
+    };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const gesture = event as Event & { scale: number; clientX: number; clientY: number };
+      zoomBy(gesture.scale / gestureScale, gesture.clientX, gesture.clientY);
+      gestureScale = gesture.scale;
+    };
+    scroller.addEventListener("pointerdown", onDown);
+    scroller.addEventListener("pointermove", onMove);
+    scroller.addEventListener("pointerup", onUp);
+    scroller.addEventListener("pointercancel", onUp);
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    scroller.addEventListener("gesturestart", onGestureStart);
+    scroller.addEventListener("gesturechange", onGestureChange);
+    return () => {
+      scroller.removeEventListener("pointerdown", onDown);
+      scroller.removeEventListener("pointermove", onMove);
+      scroller.removeEventListener("pointerup", onUp);
+      scroller.removeEventListener("pointercancel", onUp);
+      scroller.removeEventListener("wheel", onWheel);
+      scroller.removeEventListener("gesturestart", onGestureStart);
+      scroller.removeEventListener("gesturechange", onGestureChange);
+    };
+  }, [zoomBy]);
 
   return (
     <div
       className={`group/stage relative w-full ${fill ? "h-full" : "h-[min(32rem,70vh)] min-h-64"}`}
     >
-      <div className="h-full w-full overflow-auto overscroll-contain">
+      <div ref={scrollerRef} className="h-full w-full cursor-grab overflow-auto overscroll-contain">
         <div
           className="relative min-h-full min-w-full"
           style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }}
