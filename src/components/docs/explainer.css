@@ -162,6 +162,36 @@
   filter: drop-shadow(0 0 5px color-mix(in oklab, var(--primary) 55%, transparent));
 }
 
+/*
+ * Step numbers: a small pill on each arrow, in the accent colour, that
+ * appears as the stroke passes it. It follows the spotlight like its edge.
+ */
+.explainer-stage[data-explainer] .explainer-badge {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-out;
+}
+
+.explainer-stage[data-explainer] .explainer-badge.explainer-badge-shown {
+  opacity: 1;
+}
+
+.explainer-stage[data-explainer-spotlight] .explainer-badge.explainer-badge-shown:not(.explainer-focus) {
+  opacity: 0.4;
+}
+
+.explainer-stage .explainer-badge rect {
+  fill: var(--primary);
+  stroke: var(--background);
+  stroke-width: 1.5;
+}
+
+.explainer-stage .explainer-badge text {
+  fill: var(--primary-foreground);
+  font: 600 10px ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (prefers-reduced-motion: reduce) {
   /*
    * Motion is the entire feature, so reduced-motion doesn't disable it — it

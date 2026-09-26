@@ -44,6 +44,8 @@ export function MermaidExplainer({
   dark,
   colored,
   camera = true,
+  followNumbers = true,
+  showNumbers = true,
   fill,
   controls,
   onError,
@@ -56,6 +58,10 @@ export function MermaidExplainer({
   colored?: boolean;
   /** Let the camera close in on each beat; off holds the whole diagram. */
   camera?: boolean;
+  /** Play the author's numbered arrows (`A -->|1| B`) in their order first. */
+  followNumbers?: boolean;
+  /** Show each arrow's step number on it as it is drawn. */
+  showNumbers?: boolean;
   fill?: boolean;
   controls?: React.ReactNode;
   onError: (message: string | null) => void;
@@ -151,12 +157,13 @@ export function MermaidExplainer({
           return;
         }
 
-        const plan = planExplainer(graph);
+        const plan = planExplainer(graph, { followNumbers });
         // "Fit" is the camera's wide shot, margin included, so resetting the
         // view and the camera's closing pull-back land on the same framing.
         viewport.setBase(homeFrame(graph));
         const player = new ExplainerPlayer(graph, plan, setState, {
           camera,
+          numbers: showNumbers,
           // Through the viewport, so a reader who has taken the view keeps it.
           onFrame: (frame) => viewport.follow(frame),
         });
@@ -185,7 +192,7 @@ export function MermaidExplainer({
     // changes would restart the animation mid-watch. `fill` only decides the
     // wheel rule for a tall stage and must not re-render on full screen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code, dark, colored, camera, onError, onRatio, onUnsupported]);
+  }, [code, dark, colored, camera, followNumbers, showNumbers, onError, onRatio, onUnsupported]);
 
   useEffect(() => {
     playerRef.current?.setSpeed(speed);

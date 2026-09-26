@@ -35,7 +35,7 @@ import {
   paceFor,
   stepDuration,
 } from "./plan";
-import type { ExplainerPlan, ExplainerStep } from "./plan";
+import { stepNumber, type ExplainerPlan, type ExplainerStep } from "./plan";
 import { canFollow, frameFor, framesEqual, homeFrame } from "./camera";
 import type { Frame } from "./camera";
 import { travelDuration, travelFrame } from "./camera-path";
@@ -91,7 +91,15 @@ export interface PlayerOptions {
    * a reader who has panned or zoomed by hand keeps their own view.
    */
   onFrame: (frame: Frame) => void;
+  /** Put each arrow's step number on it as it is drawn. */
+  numbers?: boolean;
 }
+
+/** How far along its edge a step-number badge sits: near the arrival end, so
+ *  a fan-out's badges spread out with their targets instead of piling up at
+ *  the shared source. */
+const BADGE_AT = 0.7;
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 function easeOut(t: number): number {
   return 1 - (1 - t) ** 3;
@@ -130,6 +138,8 @@ export class ExplainerPlayer {
   private readonly paintedNodes = new Set<string>();
   private readonly paintedEdges = new Set<string>();
   private readonly pulsingNodes = new Set<string>();
+  /** Step-number badges by edge id, when numbering is on. */
+  private readonly badges = new Map<string, SVGGElement>();
   /**
    * How far the "everything before this is finished" pass has already run.
    *
@@ -264,8 +274,49 @@ export class ExplainerPlayer {
       path.classList.add("explainer-edge");
       edge.label?.classList.add("explainer-label", "explainer-hidden");
     }
+    if (this.options.numbers) this.createBadges();
 
     this.render(0);
+  }
+
+  /**
+   * One small numbered pill per arrow, hidden until its stroke passes it.
+   *
+   * An arrow whose own label already starts with that number (the author wrote
+   * `-->|2. Pay|`) gets none: the label is the badge.
+   */
+  private createBadges(): void {
+    for (const step of this.plan.steps) {
+      if (step.type === "reveal-node" || !step.number) continue;
+      const edge = this.edgesById.get(step.edgeId);
+      if (!edge || edge.length <= 0) continue;
+      const authored = stepNumber(edge.text);
+      if (authored && authored.join(".") === step.number) continue;
+      let point: DOMPoint;
+      try {
+        point = edge.path.getPointAtLength(edge.length * BADGE_AT);
+      } catch {
+        continue;
+      }
+      const badge = document.createElementNS(SVG_NS, "g");
+      badge.setAttribute("class", "explainer-badge");
+      badge.setAttribute("transform", `translate(${point.x}, ${point.y})`);
+      const width = Math.max(18, step.number.length * 6.5 + 9);
+      const pill = document.createElementNS(SVG_NS, "rect");
+      pill.setAttribute("x", `${-width / 2}`);
+      pill.setAttribute("y", "-9");
+      pill.setAttribute("width", `${width}`);
+      pill.setAttribute("height", "18");
+      pill.setAttribute("rx", "9");
+      const text = document.createElementNS(SVG_NS, "text");
+      text.setAttribute("text-anchor", "middle");
+      text.setAttribute("dy", "0.35em");
+      text.textContent = step.number;
+      badge.append(pill, text);
+      // Beside its own path, so it shares the edge's coordinate space.
+      edge.path.parentNode?.appendChild(badge);
+      this.badges.set(edge.id, badge);
+    }
   }
 
   /** Restore the SVG to a plain static diagram and drop the clock. */
@@ -304,6 +355,8 @@ export class ExplainerPlayer {
       edge.label?.classList.remove("explainer-label", "explainer-hidden", "explainer-focus");
       if (edge.label) edge.label.style.opacity = "";
     }
+    for (const badge of this.badges.values()) badge.remove();
+    this.badges.clear();
     this.options.onFrame(this.home);
   }
 
@@ -489,6 +542,7 @@ export class ExplainerPlayer {
       const edge = this.edgesById.get(id);
       edge?.path.classList.toggle("explainer-focus", on);
       edge?.label?.classList.toggle("explainer-focus", on);
+      this.badges.get(id)?.classList.toggle("explainer-focus", on);
     }
   }
 
@@ -535,6 +589,7 @@ export class ExplainerPlayer {
 
   private paintEdge(edge: ExplainerGraph["edges"][number], amount: number): void {
     const { path } = edge;
+    this.badges.get(edge.id)?.classList.toggle("explainer-badge-shown", amount >= BADGE_AT);
     path.style.strokeDashoffset = `${edge.length * (1 - amount)}`;
     if (amount <= 0) this.paintedEdges.delete(edge.id);
     else this.paintedEdges.add(edge.id);

@@ -217,6 +217,7 @@ export function Mermaid({
       document.documentElement.getAttribute("data-diagram-colors") !== "off",
   );
   const camera = useCameraPreference();
+  const { followNumbers, showNumbers } = useStepPreferences();
   const [renderError, setRenderError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   // Measured by the inline stage; the frame needs it too, to narrow with a tall
@@ -424,6 +425,8 @@ export function Mermaid({
             dark={dark}
             colored={colored}
             camera={camera}
+            followNumbers={followNumbers}
+            showNumbers={showNumbers}
             fill={stageFill}
             controls={controls}
             onError={setRenderError}
@@ -530,6 +533,43 @@ function cameraAllowed(): boolean {
     typeof window !== "undefined" &&
     window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   return !reduced && document.documentElement.getAttribute("data-diagram-camera") !== "off";
+}
+
+interface StepPreferences {
+  /** Play the author's numbered arrows in their order. */
+  followNumbers: boolean;
+  /** Show each arrow's step number on it. */
+  showNumbers: boolean;
+}
+
+function stepPreferences(): StepPreferences {
+  if (typeof document === "undefined") return { followNumbers: true, showNumbers: true };
+  const root = document.documentElement;
+  return {
+    followNumbers: root.getAttribute("data-diagram-order") !== "auto",
+    showNumbers: root.getAttribute("data-diagram-numbers") !== "off",
+  };
+}
+
+/** Step order and numbering, published on <html> like the camera setting. */
+function useStepPreferences(): StepPreferences {
+  const [prefs, setPrefs] = useState(stepPreferences);
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const next = stepPreferences();
+      setPrefs((current) =>
+        current.followNumbers === next.followNumbers && current.showNumbers === next.showNumbers
+          ? current
+          : next,
+      );
+    });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-diagram-order", "data-diagram-numbers"],
+    });
+    return () => observer.disconnect();
+  }, []);
+  return prefs;
 }
 
 /**

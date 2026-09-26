@@ -64,6 +64,10 @@ export interface SettingsPageProps {
   onSetDiagramColors: (on: boolean) => void;
   diagramCamera: boolean;
   onSetDiagramCamera: (on: boolean) => void;
+  diagramFollowNumbers: boolean;
+  onSetDiagramFollowNumbers: (on: boolean) => void;
+  diagramNumbers: boolean;
+  onSetDiagramNumbers: (on: boolean) => void;
   aiEnabled: boolean;
   onSetAiEnabled: (on: boolean) => void;
   mathRenderer: MathRendererType;
@@ -132,6 +136,10 @@ export function SettingsPage({
   onSetDiagramColors,
   diagramCamera,
   onSetDiagramCamera,
+  diagramFollowNumbers,
+  onSetDiagramFollowNumbers,
+  diagramNumbers,
+  onSetDiagramNumbers,
   aiEnabled,
   onSetAiEnabled,
   mathRenderer,
@@ -254,6 +262,10 @@ export function SettingsPage({
                 onSetDiagramColors={onSetDiagramColors}
                 diagramCamera={diagramCamera}
                 onSetDiagramCamera={onSetDiagramCamera}
+                diagramFollowNumbers={diagramFollowNumbers}
+                onSetDiagramFollowNumbers={onSetDiagramFollowNumbers}
+                diagramNumbers={diagramNumbers}
+                onSetDiagramNumbers={onSetDiagramNumbers}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
                 mathRenderer={mathRenderer}
@@ -282,6 +294,10 @@ export function SettingsPage({
                 onSetDiagramColors={onSetDiagramColors}
                 diagramCamera={diagramCamera}
                 onSetDiagramCamera={onSetDiagramCamera}
+                diagramFollowNumbers={diagramFollowNumbers}
+                onSetDiagramFollowNumbers={onSetDiagramFollowNumbers}
+                diagramNumbers={diagramNumbers}
+                onSetDiagramNumbers={onSetDiagramNumbers}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
                 mathRenderer={mathRenderer}
@@ -404,6 +420,10 @@ function AppearanceSettings({
   onSetDiagramColors,
   diagramCamera,
   onSetDiagramCamera,
+  diagramFollowNumbers,
+  onSetDiagramFollowNumbers,
+  diagramNumbers,
+  onSetDiagramNumbers,
   aiEnabled,
   onSetAiEnabled,
   mathRenderer,
@@ -419,6 +439,10 @@ function AppearanceSettings({
   onSetDiagramColors: (on: boolean) => void;
   diagramCamera: boolean;
   onSetDiagramCamera: (on: boolean) => void;
+  diagramFollowNumbers: boolean;
+  onSetDiagramFollowNumbers: (on: boolean) => void;
+  diagramNumbers: boolean;
+  onSetDiagramNumbers: (on: boolean) => void;
   aiEnabled: boolean;
   onSetAiEnabled: (on: boolean) => void;
   readingMode: ReadingMode;
@@ -581,6 +605,28 @@ function AppearanceSettings({
                 checked={diagramCamera}
                 onCheckedChange={onSetDiagramCamera}
                 aria-label="Camera motion in Stepped diagrams"
+              />
+            }
+          />
+          <Row
+            label="Follow numbered arrows"
+            hint="Number arrows in your diagram to set the order Stepped draws them: A -->|1| B, then B -->|2. Pay| C. Numbered arrows play first, in order; the rest follow automatically. Raw shows the same numbers as labels."
+            control={
+              <Switch
+                checked={diagramFollowNumbers}
+                onCheckedChange={onSetDiagramFollowNumbers}
+                aria-label="Follow numbered arrows in Stepped diagrams"
+              />
+            }
+          />
+          <Row
+            label="Show step numbers"
+            hint="Puts each arrow's step number on it as it is drawn, so you can see the order at a glance."
+            control={
+              <Switch
+                checked={diagramNumbers}
+                onCheckedChange={onSetDiagramNumbers}
+                aria-label="Show step numbers on arrows in Stepped diagrams"
               />
             }
           />

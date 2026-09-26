@@ -527,6 +527,13 @@ export interface Prefs {
    */
   diagramCamera: boolean;
   /**
+   * Stepped diagrams play arrows the author numbered (`A -->|1| B`) in that
+   * order first. Off walks every diagram in the automatic order.
+   */
+  diagramFollowNumbers: boolean;
+  /** Stepped diagrams show each arrow's step number on it as it is drawn. */
+  diagramNumbers: boolean;
+  /**
    * Whether the AI features exist at all.
    *
    * Off hides every AI surface — the Ask AI panel and its sidebar entry, the
@@ -575,6 +582,8 @@ const DEFAULT_PREFS: Prefs = {
   theme: "dark",
   diagramColors: true,
   diagramCamera: true,
+  diagramFollowNumbers: true,
+  diagramNumbers: true,
   aiEnabled: true,
   lastWorkspaceId: null,
   name: null,

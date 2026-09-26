@@ -402,6 +402,10 @@ export function DocsApp() {
   const [googleFont, setGoogleFont] = useState<string | null>(() => loadPrefs().googleFont);
   const [diagramColors, setDiagramColors] = useState<boolean>(() => loadPrefs().diagramColors);
   const [diagramCamera, setDiagramCamera] = useState<boolean>(() => loadPrefs().diagramCamera);
+  const [diagramFollowNumbers, setDiagramFollowNumbers] = useState<boolean>(
+    () => loadPrefs().diagramFollowNumbers,
+  );
+  const [diagramNumbers, setDiagramNumbers] = useState<boolean>(() => loadPrefs().diagramNumbers);
   const [aiEnabled, setAiEnabled] = useState<boolean>(() => loadPrefs().aiEnabled);
   const [mathRenderer, setMathRenderer] = useState<MathRendererType>(
     () => loadPrefs().mathRenderer,
@@ -633,6 +637,14 @@ export function DocsApp() {
     document.documentElement.setAttribute("data-diagram-camera", diagramCamera ? "on" : "off");
     savePrefs({ diagramCamera });
   }, [diagramCamera]);
+
+  // Step order and step numbers ride the same channel.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.setAttribute("data-diagram-order", diagramFollowNumbers ? "numbered" : "auto");
+    root.setAttribute("data-diagram-numbers", diagramNumbers ? "on" : "off");
+    savePrefs({ diagramFollowNumbers, diagramNumbers });
+  }, [diagramFollowNumbers, diagramNumbers]);
 
   // Turning AI off removes its surfaces rather than disabling them, so the
   // attribute is published for CSS as well as read through props.
@@ -2897,6 +2909,10 @@ flowchart LR
         onSetDiagramColors={setDiagramColors}
         diagramCamera={diagramCamera}
         onSetDiagramCamera={setDiagramCamera}
+        diagramFollowNumbers={diagramFollowNumbers}
+        onSetDiagramFollowNumbers={setDiagramFollowNumbers}
+        diagramNumbers={diagramNumbers}
+        onSetDiagramNumbers={setDiagramNumbers}
         aiEnabled={aiEnabled}
         onSetAiEnabled={setAiEnabled}
         onRestoreFromBin={restoreFromBin}

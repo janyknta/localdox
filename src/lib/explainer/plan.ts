@@ -20,11 +20,64 @@ import type { GraphShape } from "./graph";
 
 export type ExplainerStep =
   | { type: "reveal-node"; nodeId: string; label: string }
-  | { type: "draw-edge"; edgeId: string; from: string; to: string; length: number }
+  | {
+      type: "draw-edge";
+      edgeId: string;
+      from: string;
+      to: string;
+      length: number;
+      /** The arrow's step number as shown on it: "3", or the author's "1.2". */
+      number?: string;
+    }
   /** Draws an edge whose target is already on screen (a join, or a cycle's
    *  back-edge). Kept distinct so the player can skip the arrival reveal and
    *  pulse the existing node instead. */
-  | { type: "draw-edge-revisit"; edgeId: string; from: string; to: string; length: number };
+  | {
+      type: "draw-edge-revisit";
+      edgeId: string;
+      from: string;
+      to: string;
+      length: number;
+      number?: string;
+    };
+
+export interface PlanOptions {
+  /**
+   * Play arrows the author numbered (`A -->|1| B`, `A -->|2. Pay| C`) in that
+   * order before anything else. On by default: a number on an arrow is the
+   * author saying "this happens first".
+   */
+  followNumbers?: boolean;
+}
+
+/**
+ * The step number an arrow's label declares, as a sortable tuple, or null.
+ *
+ * Accepted: `1`, `1.`, `1)`, `(1)`, `1:`, `1 -`, `#1`, `Step 1`, `1.2`, each
+ * optionally followed by text (`1. Login`, `Step 2 fetch`, `1.2 retry`). A bare
+ * number followed by a word is not a step (`10 ms timeout` is a duration), so
+ * a plain `3 retries` is left alone unless written `3. retries` or `#3 retries`.
+ */
+export function stepNumber(text: string | undefined): number[] | null {
+  if (!text) return null;
+  const match = /^\s*(step\s*|#|\()?\s*(\d+(?:\.\d+)*)(.*)$/is.exec(text);
+  if (!match) return null;
+  const [, prefix, digits, rest] = match;
+  const terminated =
+    rest.trim() === "" ||
+    /^\s*[.):\-\u2013]/.test(rest) ||
+    ((Boolean(prefix) || digits.includes(".")) && /^\s/.test(rest));
+  if (!terminated) return null;
+  return digits.split(".").map(Number);
+}
+
+function compareNumbers(a: number[], b: number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (a[i] ?? -1) - (b[i] ?? -1);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
 
 export interface ExplainerPlan {
   steps: ExplainerStep[];
@@ -133,10 +186,11 @@ export function canExplain(graph: GraphShape): boolean {
   return graph.nodes.size + graph.edges.length <= MAX_EXPLAINER_STEPS;
 }
 
-export function planExplainer(graph: GraphShape): ExplainerPlan {
+export function planExplainer(graph: GraphShape, options: PlanOptions = {}): ExplainerPlan {
   if (graph.sequence) {
     return planSequence(graph);
   }
+  const followNumbers = options.followNumbers ?? true;
 
   const outgoing = new Map<string, string[]>();
   const incoming = new Map<string, number>();
@@ -179,6 +233,25 @@ export function planExplainer(graph: GraphShape): ExplainerPlan {
     });
   };
 
+  /** Draw one edge; returns whether it brought a new node on screen. */
+  const draw = (edgeId: string, number?: string): boolean => {
+    const edge = edgesById.get(edgeId)!;
+    drawn.add(edgeId);
+    const seen = revealed.has(edge.target);
+    steps.push({
+      type: seen ? "draw-edge-revisit" : "draw-edge",
+      edgeId,
+      from: edge.source,
+      to: edge.target,
+      length: edge.length,
+      ...(number ? { number } : {}),
+    });
+    // The reveal is emitted immediately after its edge; the player is what
+    // holds it until the stroke actually lands.
+    if (!seen) reveal(edge.target);
+    return !seen;
+  };
+
   const walk = (seed: string) => {
     reveal(seed);
     const queue = [seed];
@@ -186,25 +259,29 @@ export function planExplainer(graph: GraphShape): ExplainerPlan {
       const current = queue.shift()!;
       for (const edgeId of outgoing.get(current) ?? []) {
         if (drawn.has(edgeId)) continue;
-        const edge = edgesById.get(edgeId)!;
-        drawn.add(edgeId);
-        const seen = revealed.has(edge.target);
-        steps.push({
-          type: seen ? "draw-edge-revisit" : "draw-edge",
-          edgeId,
-          from: edge.source,
-          to: edge.target,
-          length: edge.length,
-        });
-        if (!seen) {
-          // The reveal is emitted immediately after its edge; the player is
-          // what holds it until the stroke actually lands.
-          reveal(edge.target);
-          queue.push(edge.target);
-        }
+        if (draw(edgeId)) queue.push(edgesById.get(edgeId)!.target);
       }
     }
   };
+
+  // The author's numbered arrows come first, in their order. An arrow never
+  // leaves a node that isn't there yet, so its source appears just before it.
+  // Equal numbers play back to back; ties keep the order they were written in.
+  const numbered = followNumbers
+    ? graph.edges
+        .map((edge, index) => ({ edge, index, order: stepNumber(edge.text) }))
+        .filter((entry): entry is typeof entry & { order: number[] } => entry.order !== null)
+        .sort((a, b) => compareNumbers(a.order, b.order) || a.index - b.index)
+    : [];
+  for (const { edge, order } of numbered) {
+    reveal(edge.source);
+    draw(edge.id, order.join("."));
+  }
+  // Then everything else, carried on from what the numbered story revealed,
+  // so the rest grows out of it instead of starting over at the top.
+  for (const step of [...steps]) {
+    if (step.type === "reveal-node") walk(step.nodeId);
+  }
 
   for (const seed of entryPoints(graph, incoming, outgoing)) {
     if (!revealed.has(seed)) walk(seed);
@@ -223,6 +300,13 @@ export function planExplainer(graph: GraphShape): ExplainerPlan {
   // A node with no edges at all still deserves to appear.
   for (const node of [...graph.nodes.values()].sort(byReadingOrder)) {
     reveal(node.id);
+  }
+
+  // Every other arrow is numbered in the order it is drawn, carrying on after
+  // the author's last whole number, so the numbers read as one sequence.
+  let next = numbered.length ? Math.floor(numbered[numbered.length - 1].order[0]) + 1 : 1;
+  for (const step of steps) {
+    if (step.type !== "reveal-node" && !step.number) step.number = String(next++);
   }
 
   return {

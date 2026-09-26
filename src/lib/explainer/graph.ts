@@ -52,6 +52,8 @@ export interface ExplainerEdge {
   label: SVGGElement | null;
   /** Path length in user units; drives draw duration. */
   length: number;
+  /** The label's text, which may carry an author's step number (`1. Login`). */
+  text?: string;
 }
 
 /**
@@ -73,7 +75,8 @@ export interface GraphShapeNode {
 
 export interface GraphShape {
   nodes: Map<string, GraphShapeNode>;
-  edges: { id: string; source: string; target: string; length: number }[];
+  /** `text` is the edge's label, which may carry an author's step number. */
+  edges: { id: string; source: string; target: string; length: number; text?: string }[];
   baseView: { x: number; y: number; width: number; height: number };
   /** A sequence diagram plays in emitted order instead of by traversal. */
   sequence?: boolean;
@@ -407,6 +410,7 @@ export function readGraph(svg: SVGSVGElement): ExplainerGraph | null {
       target: target.id,
       path,
       label: labelGroups[index] ?? null,
+      text: labelGroups[index]?.textContent?.trim() || undefined,
       length,
     });
   });
