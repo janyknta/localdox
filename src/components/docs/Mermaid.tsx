@@ -260,6 +260,18 @@ export function Mermaid({
     setPerformanceImageUrl(url);
   }, []);
   const frameCap = stageRatio ? (widthCap(stageRatio) ?? null) : null;
+  /**
+   * One callback for the stage's measured proportions, whatever the framing.
+   *
+   * It used to be `setStageRatio` inline and `undefined` in full screen, and
+   * every stage lists it as an effect dependency — so entering or leaving full
+   * screen re-ran each stage's render effect and laid the diagram out again.
+   * The full-screen stage's measurement is simply ignored instead.
+   */
+  const fullscreenRef = useRef(false);
+  const reportRatio = useCallback((ratio: number) => {
+    if (!fullscreenRef.current) setStageRatio(ratio);
+  }, []);
 
   /**
    * A diagram with no sequence to walk — a sequence diagram, a timeline, an
@@ -304,7 +316,11 @@ export function Mermaid({
   // control, and the flag has to agree either way.
   const frameRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === frameRef.current);
+    const sync = () => {
+      const on = document.fullscreenElement === frameRef.current;
+      fullscreenRef.current = on;
+      setFullscreen(on);
+    };
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
@@ -450,7 +466,7 @@ export function Mermaid({
             fill={stageFill}
             controls={controls}
             onError={setRenderError}
-            onRatio={stageFill ? undefined : setStageRatio}
+            onRatio={reportRatio}
             onUnsupported={handleUnsupported}
           />
         </Suspense>
@@ -464,7 +480,7 @@ export function Mermaid({
             dark={dark}
             fill={stageFill}
             onError={setRenderError}
-            onRatio={stageFill ? undefined : setStageRatio}
+            onRatio={reportRatio}
           />
         </Suspense>
       );
@@ -478,7 +494,7 @@ export function Mermaid({
           fill={stageFill}
           controls={controls}
           onError={setRenderError}
-          onRatio={stageFill ? undefined : setStageRatio}
+          onRatio={reportRatio}
           performanceMode={performanceMode}
           onPerformanceImage={handlePerformanceImage}
           onOversized={handleOversized}
@@ -492,7 +508,7 @@ export function Mermaid({
         fill={stageFill}
         controls={controls}
         onError={setRenderError}
-        onRatio={stageFill ? undefined : setStageRatio}
+        onRatio={reportRatio}
       />
     );
   };
@@ -521,22 +537,24 @@ export function Mermaid({
             once; with the frame itself going full screen there is only ever one
             diagram mounted, so nothing has to be swapped out or measured to
             stop the surrounding text from jumping. */}
+        {/* The stage keeps one place in the tree in and out of full screen:
+            the wrapper only changes class (and is `display: contents` inline),
+            so React keeps the same stage instance — its render, its layout and
+            the explainer's position — instead of mounting a fresh one. */}
         {renderError ? (
           <MermaidError error={renderError} />
-        ) : fullscreen ? (
-          <div className="min-h-0 flex-1">
-            {performanceMode ? (
+        ) : (
+          <div className={fullscreen ? "min-h-0 flex-1" : "contents"}>
+            {fullscreen && performanceMode ? (
               performanceImageUrl ? (
                 <PerformanceDiagramImage src={performanceImageUrl} name={baseName(name)} fill />
               ) : (
                 <StageSpinner label="Preparing large diagram…" />
               )
             ) : (
-              stageFor(true)
+              stageFor(fullscreen)
             )}
           </div>
-        ) : (
-          stageFor(false)
         )}
       </div>
     </>
