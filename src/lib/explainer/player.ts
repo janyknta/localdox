@@ -25,7 +25,16 @@
  */
 
 import type { ExplainerGraph } from "./graph";
-import { BEAT_PAUSE_MS, REVEAL_MS, paceFor, stepDuration } from "./plan";
+import {
+  BEAT_PAUSE_MS,
+  FINALE_MS,
+  OUTRO_HOLD_MS,
+  OUTRO_MS,
+  PULSE_TAIL_MS,
+  REVEAL_MS,
+  paceFor,
+  stepDuration,
+} from "./plan";
 import type { ExplainerPlan, ExplainerStep } from "./plan";
 import { canFollow, frameFor, framesEqual, homeFrame } from "./camera";
 import type { Frame } from "./camera";
@@ -83,15 +92,6 @@ export interface PlayerOptions {
    */
   onFrame: (frame: Frame) => void;
 }
-
-/** How long a revisit target keeps pulsing after its edge lands. */
-const PULSE_TAIL_MS = 420;
-/** The finished last beat stays framed this long before the pull back. */
-const OUTRO_HOLD_MS = 700;
-/** The final pull back to the whole diagram: slow, like a closing wide shot. */
-const OUTRO_MS = 1900;
-/** Without a camera, the time the finished picture takes to light up fully. */
-const FINALE_MS = 600;
 
 function easeOut(t: number): number {
   return 1 - (1 - t) ** 3;

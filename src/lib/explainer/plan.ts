@@ -16,7 +16,7 @@
  * reasoned about (and tested) on its own.
  */
 
-import type { ExplainerGraph } from "./graph";
+import type { GraphShape } from "./graph";
 
 export type ExplainerStep =
   | { type: "reveal-node"; nodeId: string; label: string }
@@ -43,7 +43,7 @@ export interface ExplainerPlan {
  * document order so we always start somewhere.
  */
 function entryPoints(
-  graph: ExplainerGraph,
+  graph: GraphShape,
   incoming: Map<string, number>,
   outgoing: Map<string, string[]>,
 ): string[] {
@@ -94,7 +94,7 @@ function byReadingOrder(a: { x: number; y: number }, b: { x: number; y: number }
  * order they happen. Running BFS over this instead would reorder a protocol,
  * which is the one thing a sequence diagram must not do.
  */
-function planSequence(graph: ExplainerGraph): ExplainerPlan {
+function planSequence(graph: GraphShape): ExplainerPlan {
   const steps: ExplainerStep[] = [];
   const revealed = new Set<string>();
   for (const node of graph.nodes.values()) {
@@ -129,12 +129,12 @@ function planSequence(graph: ExplainerGraph): ExplainerPlan {
 export const MAX_EXPLAINER_STEPS = 4_000;
 
 /** Whether this graph is small enough to be worth stepping through at all. */
-export function canExplain(graph: ExplainerGraph): boolean {
+export function canExplain(graph: GraphShape): boolean {
   return graph.nodes.size + graph.edges.length <= MAX_EXPLAINER_STEPS;
 }
 
-export function planExplainer(graph: ExplainerGraph): ExplainerPlan {
-  if (graph.svg.getAttribute("aria-roledescription") === "sequence") {
+export function planExplainer(graph: GraphShape): ExplainerPlan {
+  if (graph.sequence) {
     return planSequence(graph);
   }
 
@@ -251,6 +251,14 @@ export const REVEAL_MS = 420;
 export const SETTLE_MS = 220;
 /** Rest between beats, so one idea visibly ends before the next begins. */
 export const BEAT_PAUSE_MS = 320;
+/** How long a revisit target keeps pulsing after its edge lands. */
+export const PULSE_TAIL_MS = 420;
+/** The finished last beat stays framed this long before the pull back. */
+export const OUTRO_HOLD_MS = 700;
+/** The final pull back to the whole diagram: slow, like a closing wide shot. */
+export const OUTRO_MS = 1900;
+/** Without a camera, the time the finished picture takes to light up fully. */
+export const FINALE_MS = 600;
 
 export function edgeDuration(length: number): number {
   return Math.min(EDGE_MS.max, Math.max(EDGE_MS.min, length * EDGE_MS.perUnit));

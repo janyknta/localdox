@@ -54,7 +54,32 @@ export interface ExplainerEdge {
   length: number;
 }
 
-export interface ExplainerGraph {
+/**
+ * What planning and camera framing actually need: positions and topology.
+ *
+ * The SVG explainer's graph (below) carries element handles on top of this; the
+ * GPU engine (lib/diagram-engine) builds one straight from its own layout, with
+ * no DOM at all. Keeping the planner and the camera on this narrower type is
+ * what lets both renderers share one idea of the order and the framing.
+ */
+export interface GraphShapeNode {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface GraphShape {
+  nodes: Map<string, GraphShapeNode>;
+  edges: { id: string; source: string; target: string; length: number }[];
+  baseView: { x: number; y: number; width: number; height: number };
+  /** A sequence diagram plays in emitted order instead of by traversal. */
+  sequence?: boolean;
+}
+
+export interface ExplainerGraph extends GraphShape {
   nodes: Map<string, ExplainerNode>;
   edges: ExplainerEdge[];
   /** Subgraph boxes, for camera framing. */

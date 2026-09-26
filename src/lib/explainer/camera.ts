@@ -19,7 +19,7 @@
  * write per frame and nothing re-renders.
  */
 
-import type { ExplainerGraph } from "./graph";
+import type { GraphShape } from "./graph";
 import { TALL_STAGE_RATIO } from "@/components/docs/stage-ratio";
 import { clampInside, type Frame } from "./camera-path";
 
@@ -39,7 +39,7 @@ const FOCUS_FILL = 0.55;
 const NOT_WORTH_IT = 0.9;
 
 /** Whether the camera should move at all for this diagram. */
-export function canFollow(graph: ExplainerGraph): boolean {
+export function canFollow(graph: GraphShape): boolean {
   const { baseView, nodes } = graph;
   if (nodes.size < FOLLOW_MIN_NODES) return false;
   // A very tall diagram is rendered at full height and scrolled by the page, so
@@ -54,12 +54,12 @@ export function canFollow(graph: ExplainerGraph): boolean {
  * Grows roughly with the square root of the node count, the diagram's linear
  * size: about 1.6× for a handful of boxes, 2.2× at sixteen, capped at 3.2×.
  */
-export function maxZoomFor(graph: ExplainerGraph): number {
+export function maxZoomFor(graph: GraphShape): number {
   return Math.min(3.2, Math.max(1.6, Math.sqrt(graph.nodes.size) / 1.8));
 }
 
 /** The whole diagram, with a small margin so nothing touches the edge. */
-export function homeFrame(graph: ExplainerGraph): Frame {
+export function homeFrame(graph: GraphShape): Frame {
   const { baseView } = graph;
   const pad = Math.max(baseView.width, baseView.height) * 0.02;
   return {
@@ -77,7 +77,7 @@ export function homeFrame(graph: ExplainerGraph): Frame {
  * barely tighter than the whole diagram collapses to the whole diagram, so the
  * camera doesn't twitch for nothing.
  */
-export function frameFor(graph: ExplainerGraph, nodeIds: string[]): Frame {
+export function frameFor(graph: GraphShape, nodeIds: string[]): Frame {
   const home = homeFrame(graph);
   let minX = Infinity;
   let minY = Infinity;

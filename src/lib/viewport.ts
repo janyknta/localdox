@@ -105,6 +105,18 @@ function sameFrame(a: ViewFrame | null, b: ViewFrame | null): boolean {
   );
 }
 
+/**
+ * What the viewport frames: an `<svg>`, or anything that frames itself by a
+ * viewBox the same way. The GPU diagram stage (lib/diagram-engine) implements
+ * these three members over its canvas, so pan, zoom and the camera hand-off
+ * behave identically whichever renderer is drawing.
+ */
+export interface ViewTarget {
+  readonly viewBox: { readonly baseVal: ViewFrame | null };
+  setAttribute(name: "viewBox", value: string): void;
+  getBoundingClientRect(): DOMRect;
+}
+
 interface GestureLikeEvent extends UIEvent {
   scale: number;
   clientX: number;
@@ -137,12 +149,12 @@ export class SvgViewport {
   private destroyed = false;
 
   private readonly host: HTMLElement;
-  private svg: SVGSVGElement;
+  private svg: ViewTarget;
   private readonly options: ViewportOptions;
 
   // Plain fields rather than parameter properties: the unit tests load this
   // module through Node's type stripping, which does not accept them.
-  constructor(host: HTMLElement, svg: SVGSVGElement, options: ViewportOptions = {}) {
+  constructor(host: HTMLElement, svg: ViewTarget, options: ViewportOptions = {}) {
     this.host = host;
     this.svg = svg;
     this.options = options;
@@ -188,7 +200,7 @@ export class SvgViewport {
   }
 
   /** The framing that counts as "the whole diagram". */
-  setBase(frame: ViewFrame, svg?: SVGSVGElement): void {
+  setBase(frame: ViewFrame, svg?: ViewTarget): void {
     if (svg) this.svg = svg;
     this.base = frame;
     this.camera = frame;

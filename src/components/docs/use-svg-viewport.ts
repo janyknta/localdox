@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SvgViewport, type ViewportOptions, type ViewportState } from "@/lib/viewport";
+import {
+  SvgViewport,
+  type ViewTarget,
+  type ViewportOptions,
+  type ViewportState,
+} from "@/lib/viewport";
 
 const IDLE: ViewportState = { zoom: 1, manual: false };
 
@@ -22,7 +27,7 @@ export function useSvgViewport() {
   }, []);
 
   const attach = useCallback(
-    (host: HTMLElement, svg: SVGSVGElement, options: Omit<ViewportOptions, "onChange"> = {}) => {
+    (host: HTMLElement, svg: ViewTarget, options: Omit<ViewportOptions, "onChange"> = {}) => {
       viewportRef.current?.destroy();
       const viewport = new SvgViewport(host, svg, { ...options, onChange: setState });
       viewportRef.current = viewport;
