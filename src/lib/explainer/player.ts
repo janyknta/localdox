@@ -11,19 +11,55 @@
  * node's reveal step *begins* at the timestamp where its incoming edge's draw
  * step ends. Arrival isn't a delay that happens to line up, it is the same
  * instant expressed once.
+ *
+ * On top of the steps sits a second rhythm, the beat (see beats.ts): one node
+ * and what leaves it. The timeline is laid out beat by beat, like a lesson:
+ *
+ *   rest ─▶ camera glides to the next idea ─▶ it is drawn ─▶ rest ─▶ …
+ *   … ─▶ last beat drawn ─▶ hold ─▶ slow pull back to the whole picture
+ *
+ * The camera always arrives *before* anything is drawn in its new framing, so
+ * the reader is never chasing a stroke that has already started off-screen.
+ * The current beat is spotlit and everything already explained recedes, so
+ * there is never any doubt about what is being talked about.
  */
 
 import type { ExplainerGraph } from "./graph";
-import { REVEAL_MS, SETTLE_MS, edgeDuration, stepDuration } from "./plan";
+import { BEAT_PAUSE_MS, REVEAL_MS, paceFor, stepDuration } from "./plan";
 import type { ExplainerPlan, ExplainerStep } from "./plan";
-import { applyFrame, frameFor, framesEqual, homeFrame, lerpFrame, shouldFollow } from "./camera";
+import { canFollow, frameFor, framesEqual, homeFrame } from "./camera";
 import type { Frame } from "./camera";
+import { travelDuration, travelFrame } from "./camera-path";
+import { groupBeats, type Beat } from "./beats";
 
 /** A step placed on the timeline. */
 interface ScheduledStep {
   step: ExplainerStep;
   start: number;
   end: number;
+}
+
+/** A beat placed on the timeline. */
+interface ScheduledBeat extends Beat {
+  /**
+   * When this beat becomes the one being talked about: the moment the camera
+   * sets off towards it, which is after the previous beat's closing rest.
+   */
+  activeFrom: number;
+  /** First stroke of the beat, after the camera has arrived. */
+  start: number;
+  /** Last step of the beat finishes. */
+  end: number;
+  frame: Frame;
+  caption: string;
+}
+
+interface CameraMove {
+  start: number;
+  end: number;
+  from: Frame;
+  to: Frame;
+  pullBack: boolean;
 }
 
 export interface PlayerState {
@@ -33,15 +69,29 @@ export interface PlayerState {
   /** Index of the step currently under the playhead. */
   index: number;
   stepCount: number;
+  /** Index of the beat being explained; -1 once the finale has begun. */
+  beat: number;
+  beatCount: number;
 }
 
-const CAMERA_EASE_MS = 620;
+export interface PlayerOptions {
+  /** Let the camera move in on each beat. Off holds the whole diagram. */
+  camera: boolean;
+  /**
+   * Where camera framings go. The stage routes them through its viewport, so
+   * a reader who has panned or zoomed by hand keeps their own view.
+   */
+  onFrame: (frame: Frame) => void;
+}
+
 /** How long a revisit target keeps pulsing after its edge lands. */
 const PULSE_TAIL_MS = 420;
-
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-}
+/** The finished last beat stays framed this long before the pull back. */
+const OUTRO_HOLD_MS = 700;
+/** The final pull back to the whole diagram: slow, like a closing wide shot. */
+const OUTRO_MS = 1900;
+/** Without a camera, the time the finished picture takes to light up fully. */
+const FINALE_MS = 600;
 
 function easeOut(t: number): number {
   return 1 - (1 - t) ** 3;
@@ -49,10 +99,15 @@ function easeOut(t: number): number {
 
 export class ExplainerPlayer {
   private readonly schedule: ScheduledStep[] = [];
+  private readonly beats: ScheduledBeat[] = [];
+  private readonly moves: CameraMove[] = [];
   private readonly follow: boolean;
-  private readonly home: Frame;
-  /** Camera framing per step index, precomputed so a frame costs no layout. */
-  private readonly frames: Frame[] = [];
+  private readonly pace: number;
+  /** Framing of the whole diagram; the viewport's "fit". */
+  readonly home: Frame;
+  /** When the last stroke finishes; after it comes the finale. */
+  private readonly stepsEnd: number;
+  private readonly total: number;
   /**
    * Edges by id.
    *
@@ -84,10 +139,14 @@ export class ExplainerPlayer {
    * settles what newly passed the playhead; a backwards seek rewinds it.
    */
   private settledThrough = 0;
+  /** The beat whose elements currently carry the spotlight; -1 for none. */
+  private litBeat = -1;
   private raf = 0;
   private lastTick = 0;
   private time = 0;
   private playing = false;
+  /** Where a step-forward stops; null while playing straight through. */
+  private stopAt: number | null = null;
   private speed = 1;
   private appliedFrame: Frame | null = null;
 
@@ -95,38 +154,84 @@ export class ExplainerPlayer {
     private readonly graph: ExplainerGraph,
     private readonly plan: ExplainerPlan,
     private readonly onState: (state: PlayerState) => void,
+    private readonly options: PlayerOptions,
   ) {
-    let cursor = 0;
-    for (const step of plan.steps) {
-      const length = stepDuration(step);
-      this.schedule.push({ step, start: cursor, end: cursor + length });
-      cursor += length;
-    }
     for (const edge of graph.edges) this.edgesById.set(edge.id, edge);
-    this.follow = shouldFollow(graph);
+    this.pace = paceFor(plan.steps.length);
+    this.follow = options.camera && canFollow(graph);
     this.home = homeFrame(graph);
-    this.frames = this.buildFrames();
-    this.prepare();
-  }
 
-  /**
-   * Precompute the framing for each step.
-   *
-   * A step's frame spans the nodes in play — for an edge, both endpoints — so
-   * the camera is already holding the destination as the arrow arrives, rather
-   * than chasing it afterwards.
-   */
-  private buildFrames(): Frame[] {
-    if (!this.follow) return this.schedule.map(() => this.home);
-    return this.schedule.map(({ step }) => {
-      const ids = step.type === "reveal-node" ? [step.nodeId] : [step.from, step.to];
-      return frameFor(this.graph, ids);
-    });
+    // Lay the timeline out beat by beat: a rest, the camera's move if the
+    // framing changes, then the beat's own steps back to back.
+    let cursor = 0;
+    let previousFrame: Frame | null = null;
+    const pause = BEAT_PAUSE_MS * this.pace;
+    for (const beat of groupBeats(plan.steps)) {
+      const frame = this.follow ? frameFor(graph, beat.nodeIds) : this.home;
+      let activeFrom = cursor;
+      if (previousFrame) {
+        cursor += pause;
+        activeFrom = cursor;
+        if (!framesEqual(previousFrame, frame)) {
+          // Camera time is not scaled by pace: a hurried camera is the one
+          // thing guaranteed to make a large diagram feel chaotic.
+          const duration = travelDuration(previousFrame, frame, this.home);
+          this.moves.push({
+            start: cursor,
+            end: cursor + duration,
+            from: previousFrame,
+            to: frame,
+            pullBack: true,
+          });
+          cursor += duration;
+        }
+      }
+      const start = cursor;
+      for (let index = beat.first; index <= beat.last; index++) {
+        const step = plan.steps[index];
+        const length = stepDuration(step) * this.pace;
+        this.schedule.push({ step, start: cursor, end: cursor + length });
+        cursor += length;
+      }
+      this.beats.push({
+        ...beat,
+        activeFrom,
+        start,
+        end: cursor,
+        frame,
+        caption: this.captionFor(beat, this.beats.length === 0),
+      });
+      previousFrame = frame;
+    }
+    this.stepsEnd = cursor;
+
+    // The closing wide shot. With no camera there is nothing to pull back, but
+    // the spotlight still lifts, and that deserves a moment on screen.
+    if (previousFrame && this.follow && !framesEqual(previousFrame, this.home)) {
+      cursor += OUTRO_HOLD_MS;
+      this.moves.push({
+        start: cursor,
+        end: cursor + OUTRO_MS,
+        from: previousFrame,
+        to: this.home,
+        pullBack: false,
+      });
+      cursor += OUTRO_MS;
+    } else if (this.beats.length > 1) {
+      cursor += FINALE_MS;
+    }
+    this.total = cursor;
+    this.prepare();
   }
 
   /** The full run length at 1x, in milliseconds. */
   get duration(): number {
-    return this.schedule.length === 0 ? 0 : this.schedule[this.schedule.length - 1].end;
+    return this.total;
+  }
+
+  /** Whether the camera moves for this diagram (the setting and its size). */
+  get following(): boolean {
+    return this.follow;
   }
 
   /**
@@ -138,7 +243,9 @@ export class ExplainerPlayer {
    */
   private prepare(): void {
     const { svg } = this.graph;
-    svg.parentElement?.setAttribute("data-explainer", "");
+    const stage = svg.parentElement;
+    stage?.setAttribute("data-explainer", "");
+    stage?.style.setProperty("--explainer-reveal", `${Math.round(REVEAL_MS * this.pace)}ms`);
 
     for (const node of this.graph.nodes.values()) {
       node.el.classList.add("explainer-node", "explainer-hidden");
@@ -154,6 +261,7 @@ export class ExplainerPlayer {
       path.style.strokeDasharray = `${edge.length} ${edge.length}`;
       path.style.strokeDashoffset = `${edge.length}`;
       path.removeAttribute("marker-end");
+      path.classList.add("explainer-edge");
       edge.label?.classList.add("explainer-label", "explainer-hidden");
     }
 
@@ -164,18 +272,22 @@ export class ExplainerPlayer {
   destroy(): void {
     cancelAnimationFrame(this.raf);
     this.playing = false;
+    this.spotlight(-1);
     this.paintedNodes.clear();
     this.paintedEdges.clear();
     this.pulsingNodes.clear();
     this.settledThrough = 0;
     const { svg } = this.graph;
-    svg.parentElement?.removeAttribute("data-explainer");
+    const stage = svg.parentElement;
+    stage?.removeAttribute("data-explainer");
+    stage?.style.removeProperty("--explainer-reveal");
     for (const node of this.graph.nodes.values()) {
       node.el.classList.remove(
         "explainer-node",
         "explainer-hidden",
         "explainer-shown",
         "explainer-pulse",
+        "explainer-focus",
       );
       node.el.style.opacity = "";
     }
@@ -183,15 +295,16 @@ export class ExplainerPlayer {
       const { path } = edge;
       path.style.strokeDasharray = "";
       path.style.strokeDashoffset = "";
+      path.classList.remove("explainer-edge", "explainer-focus");
       const marker = path.dataset.explainerMarker;
       if (marker) {
         path.setAttribute("marker-end", marker);
         delete path.dataset.explainerMarker;
       }
-      edge.label?.classList.remove("explainer-label", "explainer-hidden");
+      edge.label?.classList.remove("explainer-label", "explainer-hidden", "explainer-focus");
       if (edge.label) edge.label.style.opacity = "";
     }
-    applyFrame(svg, this.home);
+    this.options.onFrame(this.home);
   }
 
   /**
@@ -207,6 +320,7 @@ export class ExplainerPlayer {
     // Finding that window by binary search means a frame costs O(log n + k) in
     // the number of steps actually animating, rather than O(steps × edges).
     const active = this.activeRange(t);
+    const revealMs = REVEAL_MS * this.pace;
 
     const shown = new Set<string>();
     const pulsing = new Set<string>();
@@ -221,7 +335,7 @@ export class ExplainerPlayer {
       if (step.type === "reveal-node") {
         // The settle beat is padding after the fade, so the node is fully
         // opaque before the next edge starts moving.
-        const fade = span <= 0 ? 1 : (t - start) / REVEAL_MS;
+        const fade = span <= 0 ? 1 : (t - start) / revealMs;
         if (fade > 0) shown.add(step.nodeId);
         this.paintNode(step.nodeId, Math.min(1, Math.max(0, fade)));
         continue;
@@ -231,7 +345,7 @@ export class ExplainerPlayer {
       if (!edge) continue;
       const clamped = Math.min(1, Math.max(0, progress));
       this.paintEdge(edge, easeOut(clamped));
-      if (step.type === "draw-edge-revisit" && clamped >= 1 && t < end + 420) {
+      if (step.type === "draw-edge-revisit" && clamped >= 1 && t < end + PULSE_TAIL_MS) {
         pulsing.add(step.to);
       }
     }
@@ -245,7 +359,7 @@ export class ExplainerPlayer {
     // back); forward playback never needs it.
     this.resetPending(active.last, t);
     this.syncPulse(pulsing);
-
+    this.spotlight(this.beatAt(t));
     this.paintCamera(t);
   }
 
@@ -347,6 +461,56 @@ export class ExplainerPlayer {
   }
 
   /**
+   * Light the current beat and let everything else recede.
+   *
+   * Only the lit beat's own elements carry a class; the dimming of everything
+   * else is one attribute on the stage and a CSS rule. Changing beats
+   * therefore touches a handful of elements, never the whole diagram, and CSS
+   * transitions do the cross-fade.
+   */
+  private spotlight(beat: number): void {
+    if (beat === this.litBeat) return;
+    const stage = this.graph.svg.parentElement;
+    if (this.litBeat >= 0) this.markBeat(this.beats[this.litBeat], false);
+    if (beat >= 0 && this.beats.length > 1) {
+      this.markBeat(this.beats[beat], true);
+      stage?.setAttribute("data-explainer-spotlight", "");
+    } else {
+      stage?.removeAttribute("data-explainer-spotlight");
+    }
+    this.litBeat = beat >= 0 && this.beats.length > 1 ? beat : -1;
+  }
+
+  private markBeat(beat: ScheduledBeat | undefined, on: boolean): void {
+    if (!beat) return;
+    for (const id of beat.nodeIds)
+      this.graph.nodes.get(id)?.el.classList.toggle("explainer-focus", on);
+    for (const id of beat.edgeIds) {
+      const edge = this.edgesById.get(id);
+      edge?.path.classList.toggle("explainer-focus", on);
+      edge?.label?.classList.toggle("explainer-focus", on);
+    }
+  }
+
+  /** The beat being explained at `t`; -1 in the finale. */
+  private beatAt(t: number): number {
+    if (this.beats.length === 0 || t >= this.stepsEnd) return -1;
+    let low = 0;
+    let high = this.beats.length - 1;
+    let found = 0;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.beats[mid].activeFrom <= t) {
+        found = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  /**
    * Reveal is opacity only, deliberately.
    *
    * An earlier version also scaled the node up from 0.94, which needed
@@ -390,30 +554,34 @@ export class ExplainerPlayer {
     }
   }
 
-  /**
-   * Ease the viewBox toward the active step's framing.
-   *
-   * The camera leads slightly: it starts moving at the beginning of a step and
-   * settles well before the step ends, so the motion is over by the time the
-   * thing you're meant to look at happens.
-   */
-  private paintCamera(t: number): void {
-    if (!this.follow) {
-      if (!this.appliedFrame) {
-        applyFrame(this.graph.svg, this.home);
-        this.appliedFrame = this.home;
+  /** The camera's framing at `t`, from the precomputed moves. */
+  private cameraAt(t: number): Frame {
+    if (!this.follow || this.beats.length === 0) return this.home;
+    let low = 0;
+    let high = this.moves.length - 1;
+    let found = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.moves[mid].start <= t) {
+        found = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
-      return;
     }
-    const index = this.indexAt(t);
-    if (index < 0) return;
-    const target = this.frames[index] ?? this.home;
-    const previous = index > 0 ? (this.frames[index - 1] ?? this.home) : this.home;
-    const { start } = this.schedule[index];
-    const blend = Math.min(1, Math.max(0, (t - start) / CAMERA_EASE_MS));
-    const frame = lerpFrame(previous, target, easeInOut(blend));
+    // Before the first move the camera is already on the first beat: the
+    // canvas is empty at t=0, so there is nothing to establish first.
+    if (found < 0) return this.beats[0].frame;
+    const move = this.moves[found];
+    if (t >= move.end) return move.to;
+    const progress = (t - move.start) / (move.end - move.start);
+    return travelFrame(move.from, move.to, progress, this.home, move.pullBack);
+  }
+
+  private paintCamera(t: number): void {
+    const frame = this.cameraAt(t);
     if (this.appliedFrame && framesEqual(this.appliedFrame, frame)) return;
-    applyFrame(this.graph.svg, frame);
+    this.options.onFrame(frame);
     this.appliedFrame = frame;
   }
 
@@ -431,6 +599,8 @@ export class ExplainerPlayer {
       playing: this.playing,
       index: this.indexAt(this.time),
       stepCount: this.schedule.length,
+      beat: this.beatAt(this.time),
+      beatCount: this.beats.length,
     });
   }
 
@@ -438,10 +608,12 @@ export class ExplainerPlayer {
     if (!this.playing) return;
     const delta = this.lastTick === 0 ? 16 : now - this.lastTick;
     this.lastTick = now;
-    this.time = Math.min(this.duration, this.time + delta * this.speed);
+    const limit = this.stopAt ?? this.duration;
+    this.time = Math.min(limit, this.time + delta * this.speed);
     this.render(this.time);
-    if (this.time >= this.duration) {
+    if (this.time >= limit) {
       this.playing = false;
+      this.stopAt = null;
       this.emit();
       return;
     }
@@ -449,17 +621,27 @@ export class ExplainerPlayer {
     this.raf = requestAnimationFrame(this.tick);
   };
 
-  play(): void {
-    if (this.playing) return;
-    // Replay from the top rather than sitting at the end.
-    if (this.time >= this.duration) this.time = 0;
+  private run(): void {
     this.playing = true;
     this.lastTick = 0;
+    cancelAnimationFrame(this.raf);
     this.raf = requestAnimationFrame(this.tick);
     this.emit();
   }
 
+  play(): void {
+    if (this.playing && this.stopAt === null) return;
+    this.stopAt = null;
+    // Replay from the top rather than sitting at the end.
+    if (this.time >= this.duration) {
+      this.time = 0;
+      this.render(0);
+    }
+    this.run();
+  }
+
   pause(): void {
+    this.stopAt = null;
     if (!this.playing) return;
     this.playing = false;
     cancelAnimationFrame(this.raf);
@@ -488,39 +670,86 @@ export class ExplainerPlayer {
   }
 
   /**
-   * Move exactly one meaningful event.
+   * Move one beat, the way a presenter clicks to the next slide.
    *
-   * Forward lands on the *end* of the current step, so one press completes
-   * whatever is in flight; the next press completes the one after. Back lands
-   * on the start of the previous step, so you can re-watch a hop.
+   * Forward *plays* the next beat (the camera's move, then the drawing) and
+   * stops once it has landed, rather than jumping to the end state. Seeing the
+   * arrow travel is the explanation, and a cut straight to the finished frame
+   * throws it away. Pressing again while a beat is still playing finishes it at
+   * once and plays the one after, so an impatient reader is never held back.
+   *
+   * Back is instant: it returns to the moment the previous beat finished,
+   * paused, so forward from there replays the beat just undone.
    */
   step(direction: 1 | -1): void {
-    this.pause();
-    const index = this.indexAt(this.time);
+    if (this.beats.length === 0) return;
     if (direction === 1) {
-      const current = this.schedule[index];
-      if (!current) return;
-      // Already sitting on this step's end: advance to the next one's end.
-      const target = this.time >= current.end - 1 ? this.schedule[index + 1] : current;
-      this.seek(target ? target.end : this.duration);
-    } else {
-      const current = this.schedule[index];
-      if (!current) return;
-      const target = this.time <= current.start + 1 ? this.schedule[index - 1] : current;
-      this.seek(target ? target.start : 0);
+      if (this.playing && this.stopAt !== null) this.seek(this.stopAt);
+      else if (this.playing) this.pause();
+      const t = this.time;
+      if (t >= this.duration) return;
+      const current = this.beatAt(t);
+      let target: number;
+      if (current < 0) {
+        target = this.duration;
+      } else {
+        const beat = this.beats[current];
+        target = t >= beat.end - 1 ? (this.beats[current + 1]?.end ?? this.duration) : beat.end;
+      }
+      this.stopAt = target;
+      this.run();
+      return;
     }
+
+    this.pause();
+    const t = this.time;
+    let target = 0;
+    for (const beat of this.beats) {
+      if (beat.end < t - 1) target = beat.end;
+      else break;
+    }
+    this.seek(target);
   }
 
-  /** A short human description of the step at the playhead, for the caption. */
-  describe(index: number): string {
-    const entry = this.schedule[index];
-    if (!entry) return "";
-    const { step } = entry;
-    if (step.type === "reveal-node") return step.label || "Node";
-    const from = this.graph.nodes.get(step.from)?.label ?? "";
-    const to = this.graph.nodes.get(step.to)?.label ?? "";
-    return `${from} → ${to}`;
+  /** A short human description of the beat, for the caption. */
+  describe(beat: number): string {
+    if (beat < 0) return this.beats.length > 1 ? "The whole picture" : "";
+    return this.beats[beat]?.caption ?? "";
+  }
+
+  private labelOf(nodeId: string): string {
+    return this.graph.nodes.get(nodeId)?.label || "Node";
+  }
+
+  /**
+   * What the narrator would say for a beat.
+   *
+   * "Gateway → Auth, Orders, Search" names the idea, not the strokes; a single
+   * hop also carries the edge's own label, since that is often the whole point
+   * ("Client → API · HTTPS").
+   */
+  private captionFor(beat: Beat, first: boolean): string {
+    if (beat.edgeIds.length === 0) {
+      const names = beat.nodeIds.map((id) => this.labelOf(id));
+      if (names.length > 1) return `Introducing ${listOf(names)}`;
+      return first ? `Start: ${names[0] ?? ""}` : (names[0] ?? "");
+    }
+    const edges = beat.edgeIds
+      .map((id) => this.edgesById.get(id))
+      .filter((edge): edge is NonNullable<typeof edge> => Boolean(edge));
+    const from = this.labelOf(beat.owner ?? edges[0]?.source ?? "");
+    if (edges.length === 1) {
+      const edge = edges[0];
+      const label = edge.label?.textContent?.trim();
+      return `${from} → ${this.labelOf(edge.target)}${label ? ` · ${label}` : ""}`;
+    }
+    return `${from} → ${listOf(edges.map((edge) => this.labelOf(edge.target)))}`;
   }
 }
 
-export { edgeDuration, SETTLE_MS };
+/** "A, B and 3 more", short enough for a one-line caption. */
+function listOf(names: string[]): string {
+  const unique = [...new Set(names)];
+  if (unique.length <= 3) return unique.join(", ");
+  return `${unique.slice(0, 3).join(", ")} +${unique.length - 3} more`;
+}

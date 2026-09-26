@@ -62,6 +62,8 @@ export interface SettingsPageProps {
   onSetGoogleFont: (family: string | null) => void;
   diagramColors: boolean;
   onSetDiagramColors: (on: boolean) => void;
+  diagramCamera: boolean;
+  onSetDiagramCamera: (on: boolean) => void;
   aiEnabled: boolean;
   onSetAiEnabled: (on: boolean) => void;
   mathRenderer: MathRendererType;
@@ -128,6 +130,8 @@ export function SettingsPage({
   onSetGoogleFont,
   diagramColors,
   onSetDiagramColors,
+  diagramCamera,
+  onSetDiagramCamera,
   aiEnabled,
   onSetAiEnabled,
   mathRenderer,
@@ -248,6 +252,8 @@ export function SettingsPage({
                 onSetGoogleFont={onSetGoogleFont}
                 diagramColors={diagramColors}
                 onSetDiagramColors={onSetDiagramColors}
+                diagramCamera={diagramCamera}
+                onSetDiagramCamera={onSetDiagramCamera}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
                 mathRenderer={mathRenderer}
@@ -274,6 +280,8 @@ export function SettingsPage({
                 onSetGoogleFont={onSetGoogleFont}
                 diagramColors={diagramColors}
                 onSetDiagramColors={onSetDiagramColors}
+                diagramCamera={diagramCamera}
+                onSetDiagramCamera={onSetDiagramCamera}
                 aiEnabled={aiEnabled}
                 onSetAiEnabled={onSetAiEnabled}
                 mathRenderer={mathRenderer}
@@ -394,6 +402,8 @@ function AppearanceSettings({
   onSetGoogleFont,
   diagramColors,
   onSetDiagramColors,
+  diagramCamera,
+  onSetDiagramCamera,
   aiEnabled,
   onSetAiEnabled,
   mathRenderer,
@@ -407,6 +417,8 @@ function AppearanceSettings({
   onSetTheme: (theme: ThemePref) => void;
   diagramColors: boolean;
   onSetDiagramColors: (on: boolean) => void;
+  diagramCamera: boolean;
+  onSetDiagramCamera: (on: boolean) => void;
   aiEnabled: boolean;
   onSetAiEnabled: (on: boolean) => void;
   readingMode: ReadingMode;
@@ -558,6 +570,17 @@ function AppearanceSettings({
                 checked={diagramColors}
                 onCheckedChange={onSetDiagramColors}
                 aria-label="Colour diagrams by meaning"
+              />
+            }
+          />
+          <Row
+            label="Camera motion in Stepped"
+            hint="Zooms in on the part being drawn, glides between parts, then pulls back to the whole diagram. Off keeps the whole diagram in view. Your system's reduced-motion setting also turns it off."
+            control={
+              <Switch
+                checked={diagramCamera}
+                onCheckedChange={onSetDiagramCamera}
+                aria-label="Camera motion in Stepped diagrams"
               />
             }
           />

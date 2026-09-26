@@ -394,6 +394,7 @@ export function DocsApp() {
   const [readingFont, setReadingFont] = useState<ReadingFont>(() => loadPrefs().readingFont);
   const [googleFont, setGoogleFont] = useState<string | null>(() => loadPrefs().googleFont);
   const [diagramColors, setDiagramColors] = useState<boolean>(() => loadPrefs().diagramColors);
+  const [diagramCamera, setDiagramCamera] = useState<boolean>(() => loadPrefs().diagramCamera);
   const [aiEnabled, setAiEnabled] = useState<boolean>(() => loadPrefs().aiEnabled);
   const [mathRenderer, setMathRenderer] = useState<MathRendererType>(
     () => loadPrefs().mathRenderer,
@@ -619,6 +620,12 @@ export function DocsApp() {
     document.documentElement.setAttribute("data-diagram-colors", diagramColors ? "on" : "off");
     savePrefs({ diagramColors });
   }, [diagramColors]);
+
+  // The explainer camera rides the same channel, for the same reason.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-diagram-camera", diagramCamera ? "on" : "off");
+    savePrefs({ diagramCamera });
+  }, [diagramCamera]);
 
   // Turning AI off removes its surfaces rather than disabling them, so the
   // attribute is published for CSS as well as read through props.
@@ -2696,6 +2703,8 @@ flowchart LR
         onSetGoogleFont={setGoogleFont}
         diagramColors={diagramColors}
         onSetDiagramColors={setDiagramColors}
+        diagramCamera={diagramCamera}
+        onSetDiagramCamera={setDiagramCamera}
         aiEnabled={aiEnabled}
         onSetAiEnabled={setAiEnabled}
         onRestoreFromBin={restoreFromBin}

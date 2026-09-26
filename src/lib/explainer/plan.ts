@@ -241,10 +241,16 @@ export function planExplainer(graph: ExplainerGraph): ExplainerPlan {
  * to follow. `PER_UNIT` is tuned so a typical inter-node hop lands near the
  * middle of the band.
  */
-const EDGE_MS = { min: 260, max: 900, perUnit: 2.6 };
-export const REVEAL_MS = 320;
+// Tuned for someone following along, not for throughput. The first cut ran at
+// 260–900ms a stroke with a 140ms rest, which is a stroke every half second:
+// accurate but breathless, like a lecturer racing the clock. A stroke is now
+// long enough to watch travel, and every node gets a real pause to register.
+const EDGE_MS = { min: 420, max: 1150, perUnit: 3.4 };
+export const REVEAL_MS = 420;
 /** A beat after a node lands, so the eye can register it before the next hop. */
-export const SETTLE_MS = 140;
+export const SETTLE_MS = 220;
+/** Rest between beats, so one idea visibly ends before the next begins. */
+export const BEAT_PAUSE_MS = 320;
 
 export function edgeDuration(length: number): number {
   return Math.min(EDGE_MS.max, Math.max(EDGE_MS.min, length * EDGE_MS.perUnit));
@@ -254,4 +260,16 @@ export function edgeDuration(length: number): number {
 export function stepDuration(step: ExplainerStep): number {
   if (step.type === "reveal-node") return REVEAL_MS + SETTLE_MS;
   return edgeDuration(step.length);
+}
+
+/**
+ * A multiplier on every duration, by plan length.
+ *
+ * The calm pacing above is right for a diagram of a few dozen steps. At a few
+ * hundred it would run for many minutes, so long plans speed up gradually,
+ * but never below 0.45×, where a stroke is still long enough to follow.
+ */
+export function paceFor(stepCount: number): number {
+  if (stepCount <= 60) return 1;
+  return Math.max(0.45, Math.sqrt(60 / stepCount));
 }

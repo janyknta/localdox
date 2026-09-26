@@ -520,6 +520,13 @@ export interface Prefs {
    */
   diagramColors: boolean;
   /**
+   * Let Stepped diagrams move the camera: close in on the part being drawn,
+   * glide between parts, and pull back to the whole at the end. Off keeps the
+   * whole diagram framed throughout. Reduced-motion system settings also hold
+   * it still, whatever this says.
+   */
+  diagramCamera: boolean;
+  /**
    * Whether the AI features exist at all.
    *
    * Off hides every AI surface — the Ask AI panel and its sidebar entry, the
@@ -567,6 +574,7 @@ const PREFS_KEY = "localdox:prefs";
 const DEFAULT_PREFS: Prefs = {
   theme: "dark",
   diagramColors: true,
+  diagramCamera: true,
   aiEnabled: true,
   lastWorkspaceId: null,
   name: null,
