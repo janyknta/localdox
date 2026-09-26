@@ -527,6 +527,8 @@ function SidebarImpl({
         else if (draggedFolder && draggedFolder !== folderId) {
           onMoveFolderToFolder?.(draggedFolder, folderId);
         }
+        setDraggingFileId(null);
+        setDraggingFolderId(null);
       },
     };
   };
