@@ -27,6 +27,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useMediaQuery } from "@/hooks/use-media-query";
 import {
   activeFileOf,
+  closeFileEverywhere,
   closeTab,
   hydratePanes,
   openInPane,
@@ -36,8 +37,14 @@ import {
   toPersisted,
   type PaneLayout,
 } from "@/lib/panes";
+import {
+  applyToDestination,
+  planTransfer,
+  transferCounts,
+} from "@/lib/workspace-transfer";
 import { WorkspaceMenu } from "./WorkspaceMenu";
 import { WorkspaceSheet } from "./WorkspaceSheet";
+import { MoveToWorkspaceDialog } from "./MoveToWorkspaceDialog";
 import type { AskAiPrefill } from "./ai/AskAiPanel";
 
 // Code-split surfaces. None of these is on the path to reading a document — the
@@ -1934,6 +1941,113 @@ flowchart LR
     [persistNow, hydrateWorkspace],
   );
 
+  /**
+   * What the sidebar asked to move, held while the reader picks a destination.
+   *
+   * The selection has to survive the menu closing — by the time the dialog is
+   * on screen the rows it came from are gone — so it lives here rather than in
+   * the sidebar's own state.
+   */
+  const [pendingMove, setPendingMove] = useState<{
+    fileIds: string[];
+    folderIds: string[];
+  } | null>(null);
+  const [moving, setMoving] = useState(false);
+
+  /**
+   * Everything the move will actually touch, expanded from the selection.
+   *
+   * Computed here rather than in the dialog so the count the reader confirms is
+   * produced by the same code that performs the move — a folder's contents
+   * included. A dialog counting only what was clicked would understate it.
+   */
+  const pendingMoveSummary = useMemo(() => {
+    if (!pendingMove) return { files: 0, folders: 0 };
+    const plan = planTransfer(
+      { files: filesRef.current, folders, saved, highlights },
+      { files: [], folders: [] },
+      pendingMove,
+    );
+    return { files: plan.files.length, folders: plan.folders.length };
+  }, [pendingMove, folders, saved, highlights]);
+
+  /**
+   * Move documents and folders into another workspace.
+   *
+   * The destination is written first and the source is only trimmed once that
+   * write has succeeded. Done the other way round, a failure between the two
+   * steps would take the documents out of this workspace without putting them
+   * in the other one — the one outcome a local-first app must never produce.
+   * The cost of this order is a possible duplicate rather than a loss, which is
+   * the right way for it to fail.
+   */
+  const moveToWorkspace = useCallback(
+    async (destinationId: string) => {
+      const selection = pendingMove;
+      if (!selection) return;
+
+      setMoving(true);
+      const toastId = toast.loading("Moving…");
+      try {
+        // Flush this workspace first: the plan is built from live state, and an
+        // unsaved edit would otherwise be written back over the move.
+        if (!(await persistNow(true))) throw new Error("Could not save this workspace first.");
+
+        const destination = await persistence.getWorkspace(destinationId);
+        if (!destination) throw new Error("That workspace no longer exists.");
+
+        const plan = planTransfer(
+          { files: filesRef.current, folders, saved, highlights },
+          destination,
+          selection,
+        );
+        if (!plan.files.length && !plan.folders.length) {
+          toast.info("Nothing to move", { id: toastId });
+          return;
+        }
+
+        await persistence.putWorkspace(applyToDestination(destination, plan));
+
+        // Only now does anything leave this workspace.
+        setFiles((prev) => prev.filter((file) => !plan.removeFileIds.has(file.id)));
+        setFolders((prev) => prev.filter((folder) => !plan.removeFolderIds.has(folder.id)));
+        setSaved((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
+        setHighlights((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
+        // A moved document must not stay open in a pane pointing at a file this
+        // workspace no longer has.
+        setPaneLayout((prev) => closeFileEverywhere(prev, [...plan.removeFileIds]));
+        markDirty();
+        await persistNow(true);
+        await refreshWorkspaceList();
+
+        const counts = transferCounts(plan);
+        const parts = [
+          counts.files ? `${counts.files} document${counts.files === 1 ? "" : "s"}` : null,
+          counts.folders ? `${counts.folders} folder${counts.folders === 1 ? "" : "s"}` : null,
+        ].filter(Boolean);
+        toast.success(`Moved ${parts.join(" and ")} to ${destination.name}`, { id: toastId });
+      } catch (error) {
+        toast.error("Move failed", {
+          id: toastId,
+          description: error instanceof Error ? error.message : undefined,
+        });
+      } finally {
+        setMoving(false);
+        setPendingMove(null);
+      }
+    },
+    [
+      pendingMove,
+      folders,
+      saved,
+      highlights,
+      persistNow,
+      markDirty,
+      refreshWorkspaceList,
+      setHighlights,
+    ],
+  );
+
   const openEmbeddedArtifact = useCallback(
     async (fileId: string, targetWorkspaceId: string) => {
       if (targetWorkspaceId !== workspaceIdRef.current) await switchWorkspace(targetWorkspaceId);
@@ -2720,6 +2834,25 @@ flowchart LR
   // Settings is a dialog over the reader rather than a page of its own, so the
   // document stays visible behind it and closing it returns you to exactly what
   // you were reading. `/settings` stays a real route so the deep link still
+  /**
+   * Destination picker for a cross-workspace move.
+   *
+   * Rendered alongside the other dialogs rather than inside the sidebar: the
+   * sidebar is unmounted on a phone once the drawer closes, and the move must
+   * survive that — it is the reader's documents in flight.
+   */
+  const moveDialog = (
+    <MoveToWorkspaceDialog
+      open={pendingMove !== null}
+      summary={pendingMoveSummary}
+      workspaces={workspaces}
+      currentWorkspaceId={workspaceId}
+      busy={moving}
+      onCancel={() => setPendingMove(null)}
+      onConfirm={(destinationId) => void moveToWorkspace(destinationId)}
+    />
+  );
+
   // works — it just opens the dialog on top. Rendered from both the empty state
   // and the reader, so that link resolves even before any document is open.
   const settingsDialog = showSettings ? (
@@ -2857,6 +2990,7 @@ flowchart LR
         {dragOverlay}
         {shareDialog}
         {settingsDialog}
+        {moveDialog}
       </div>
     );
   }
@@ -2906,6 +3040,7 @@ flowchart LR
                 onRemoveFile={moveToBin}
                 onDownloadFile={downloadFile}
                 onDownloadFiles={downloadFiles}
+                onMoveToWorkspace={workspaces.length > 1 ? setPendingMove : undefined}
                 onShareFile={shareFile}
                 onShareFiles={(ids) => void shareFiles(ids)}
                 onRenameFile={renameFile}
@@ -3040,6 +3175,7 @@ flowchart LR
                     onRemoveFile={moveToBin}
                     onDownloadFile={downloadFile}
                     onDownloadFiles={downloadFiles}
+                onMoveToWorkspace={workspaces.length > 1 ? setPendingMove : undefined}
                     onShareFile={shareFile}
                     onShareFiles={(ids) => void shareFiles(ids)}
                     onRenameFile={renameFile}
@@ -3351,6 +3487,7 @@ flowchart LR
         )}
 
         {settingsDialog}
+        {moveDialog}
 
         {dragOverlay}
         {shareDialog}
