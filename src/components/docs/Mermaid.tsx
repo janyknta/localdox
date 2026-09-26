@@ -34,6 +34,7 @@ import {
   readSvgViewBox,
   shouldUseDiagramPerformanceMode,
 } from "./mermaid-performance";
+import { diagramKind, shouldUseGpuEngine } from "@/lib/diagram-engine/gate";
 import {
   MAX_STAGE_RATIO,
   MIN_STAGE_RATIO,
@@ -57,6 +58,11 @@ function widthCap(ratio: number): string | undefined {
  */
 const MermaidExplainer = lazy(() =>
   import("./MermaidExplainer").then((m) => ({ default: m.MermaidExplainer })),
+);
+
+/** The GPU engine's raw stage, for large flowcharts only; see lib/diagram-engine. */
+const LargeDiagramStage = lazy(() =>
+  import("./LargeDiagramStage").then((m) => ({ default: m.LargeDiagramStage })),
 );
 
 /**
@@ -238,7 +244,17 @@ export function Mermaid({
   const handleOversized = useCallback(() => setRenderTooLarge(true), []);
   // A new diagram deserves a fresh verdict; the old one's may not apply.
   useEffect(() => setRenderTooLarge(false), [source]);
-  const performanceMode = sourceTooLarge || renderTooLarge;
+  /**
+   * A large flowchart goes to the GPU engine (Rust/WASM layout, WebGL drawing)
+   * instead of being flattened to an image. It stays live in Raw and Stepped;
+   * only Flow, the packet animator, remains off at this size.
+   */
+  const gpuKind = useMemo(() => diagramKind(source), [source]);
+  // Also when Mermaid's own render turned out too big for live SVG: a large
+  // ER or class diagram goes to the engine instead of to a still image.
+  const gpu =
+    useMemo(() => shouldUseGpuEngine(source), [source]) || (renderTooLarge && gpuKind !== null);
+  const performanceMode = !gpu && (sourceTooLarge || renderTooLarge);
   const [performanceImageUrl, setPerformanceImageUrl] = useState<string | null>(null);
   const handlePerformanceImage = useCallback((url: string | null) => {
     setPerformanceImageUrl(url);
@@ -361,17 +377,21 @@ export function Mermaid({
         stepped: "Disabled for very large diagrams to keep rendering responsive",
         flow: "Disabled for very large diagrams to protect device performance",
       }
-    : steppedUnavailable
-      ? { stepped: "This diagram has no sequence to step through" }
-      : undefined;
+    : gpu
+      ? { flow: "Disabled for very large diagrams to protect device performance" }
+      : steppedUnavailable
+        ? { stepped: "This diagram has no sequence to step through" }
+        : undefined;
 
-  const visibleMode = performanceMode ? "raw" : mode;
+  const visibleMode = performanceMode || (gpu && mode === "flow") ? "raw" : mode;
   const modeControl = <ModeTabs mode={visibleMode} onChange={setMode} unavailable={unavailable} />;
 
   // An unsupported diagram still has to show something: render it raw while
   // leaving the reader's chosen tab alone.
   const effectiveMode: MermaidMode =
-    performanceMode || (mode === "stepped" && steppedUnavailable) ? "raw" : mode;
+    performanceMode || (mode === "stepped" && steppedUnavailable) || (gpu && mode === "flow")
+      ? "raw"
+      : mode;
 
   /**
    * The bar above the diagram: what mode you are in, and what you can do to the
@@ -432,6 +452,19 @@ export function Mermaid({
             onError={setRenderError}
             onRatio={stageFill ? undefined : setStageRatio}
             onUnsupported={handleUnsupported}
+          />
+        </Suspense>
+      );
+    }
+    if (effectiveMode === "raw" && gpu) {
+      return (
+        <Suspense fallback={<StageSpinner label="Loading large diagram…" />}>
+          <LargeDiagramStage
+            code={source}
+            dark={dark}
+            fill={stageFill}
+            onError={setRenderError}
+            onRatio={stageFill ? undefined : setStageRatio}
           />
         </Suspense>
       );

@@ -7,9 +7,14 @@ import { renderMermaid } from "./mermaid-render-cache";
 import { describeRenderError } from "./render-error";
 import { ExplainerPlayer, type PlayerState } from "@/lib/explainer/player";
 import { homeFrame } from "@/lib/explainer/camera";
+import { diagramKind, shouldUseGpuEngine } from "@/lib/diagram-engine/gate";
+import type { DiagramRenderer } from "@/lib/diagram-engine/renderer";
+import type { GpuPlayer } from "@/lib/diagram-engine/gpu-player";
+import { zoomCeiling } from "@/lib/diagram-engine/zoom";
 import { Tray, TrayButton, ZoomControls } from "./Mermaid";
 import { useSvgViewport } from "./use-svg-viewport";
 import {
+  TALL_STAGE_RATIO,
   clampStageRatio,
   isTallStage,
   stageBoxStyle,
@@ -19,6 +24,8 @@ import {
 import "./explainer.css";
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const;
+/** A tour of thousands of beats needs a fast-forward. */
+const LARGE_SPEEDS = [0.5, 1, 2, 4, 8] as const;
 
 /** A tall stage takes the full column, so it gets no width cap at all. */
 function widthCap(ratio: number): string | undefined {
@@ -74,7 +81,14 @@ export function MermaidExplainer({
   onUnsupported?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const playerRef = useRef<ExplainerPlayer | null>(null);
+  // The SVG player, or for a large flowchart the GPU engine's; both expose the
+  // same transport, so everything below drives either.
+  const playerRef = useRef<ExplainerPlayer | GpuPlayer | null>(null);
+  const rendererRef = useRef<DiagramRenderer | null>(null);
+  const minimapRef = useRef<{ destroy(): void } | null>(null);
+  // A GPU-drawn diagram is too big to find your way around by hovering: its
+  // controls stay on screen, and it gets faster speeds.
+  const [large, setLarge] = useState(false);
   const [loading, setLoading] = useState(true);
   const [ratio, setRatio] = useState<number | null>(null);
   // The diagram's own dimensions, needed to size a tall stage at natural scale
@@ -108,8 +122,59 @@ export function MermaidExplainer({
     setLoading(true);
     onError(null);
 
+    /**
+     * A large flowchart skips Mermaid's layout and SVG entirely: Rust/WASM
+     * lays it out, WebGL draws it, and the same planner and camera drive it.
+     * See lib/diagram-engine for why and for the measurements.
+     */
+    const runGpu = async () => {
+      const [{ loadScene, diagramTheme }, { DiagramRenderer }, { GpuPlayer }, { attachMinimap }] =
+        await Promise.all([
+          import("@/lib/diagram-engine/engine"),
+          import("@/lib/diagram-engine/renderer"),
+          import("@/lib/diagram-engine/gpu-player"),
+          import("@/lib/diagram-engine/minimap"),
+        ]);
+      const [scene, theme] = await Promise.all([loadScene(code), diagramTheme(dark)]);
+      if (disposed) return;
+      host.innerHTML = "";
+      const renderer = new DiagramRenderer(host, scene, theme, { lineArt: true });
+      rendererRef.current = renderer;
+      // Never a page-scrolled "tall" stage: its natural height could be
+      // hundreds of thousands of pixels. The camera and the viewport frame it.
+      const measured = clampStageRatio(Math.min(scene.height / scene.width, TALL_STAGE_RATIO));
+      setRatio(measured);
+      setSize(null);
+      onRatio?.(measured);
+      const viewport = attach(host, renderer.target, {
+        maxZoom: zoomCeiling(scene.width, scene.height),
+      });
+      const plan = planExplainer(scene.graph, { followNumbers });
+      viewport.setBase(homeFrame(scene.graph));
+      // The closest the camera goes: this stage's width at a size where 14px
+      // labels still read, so a close-up is always legible, never a smudge.
+      const readableSpan = Math.max(500, (host.clientWidth || 800) / 1.05);
+      const player = new GpuPlayer(scene, plan, renderer, setState, {
+        camera,
+        onFrame: (frame) => viewport.follow(frame),
+        readableSpan,
+        numbers: showNumbers,
+      });
+      minimapRef.current = attachMinimap(renderer, scene, theme, viewport, readableSpan);
+      setLarge(true);
+      playerRef.current = player;
+      setFollowing(player.following);
+      player.setSpeed(speed);
+      setLoading(false);
+      player.play();
+    };
+
     const run = async () => {
       try {
+        if (shouldUseGpuEngine(code)) {
+          await runGpu();
+          return;
+        }
         // Shared with the static stage and with the fullscreen copy of this
         // one, so switching modes or opening fullscreen reuses the render
         // instead of laying the diagram out again.
@@ -146,6 +211,12 @@ export function MermaidExplainer({
         const viewport = attach(host, svgEl as SVGSVGElement, { wheelPan: !tall });
 
         const graph = readGraph(svgEl as SVGSVGElement);
+        if (graph && !canExplain(graph) && diagramKind(code)) {
+          // Too many steps for the SVG player, but a kind the GPU engine
+          // draws: hand it over rather than switching Stepped off.
+          await runGpu();
+          return;
+        }
         if (!graph || !canExplain(graph)) {
           // Nothing to sequence — or so much to sequence that stepping through
           // it would take an hour and cost more than the reader's tab can
@@ -185,6 +256,11 @@ export function MermaidExplainer({
       playerRef.current?.destroy();
       playerRef.current = null;
       detach();
+      minimapRef.current?.destroy();
+      minimapRef.current = null;
+      rendererRef.current?.destroy();
+      rendererRef.current = null;
+      setLarge(false);
       setFollowing(false);
       host.innerHTML = "";
     };
@@ -245,13 +321,18 @@ export function MermaidExplainer({
     >
       <div
         className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-wrap items-center justify-end gap-2 p-3 ${
-          fill
+          fill || large
             ? ""
             : "opacity-0 transition-opacity duration-150 group-hover/stage:opacity-100 group-focus-within/stage:opacity-100 [@media(hover:none)]:opacity-100"
         }`}
       >
         {state.stepCount > 0 && (
           <>
+            <Scrubber
+              time={state.time}
+              duration={state.duration}
+              onSeek={(time) => playerRef.current?.seek(time)}
+            />
             {/* The caption names the step under the playhead. On a diagram of
                 any size the transport alone doesn't tell you what you're
                 looking at, and this is cheaper than a legend. */}
@@ -293,7 +374,10 @@ export function MermaidExplainer({
             <Tray>
               <button
                 type="button"
-                onClick={() => setSpeed(SPEEDS[(SPEEDS.indexOf(speed as 1) + 1) % SPEEDS.length])}
+                onClick={() => {
+                  const speeds: readonly number[] = large ? LARGE_SPEEDS : SPEEDS;
+                  setSpeed(speeds[(speeds.indexOf(speed) + 1) % speeds.length]);
+                }}
                 aria-label={`Playback speed ${speed}×`}
                 title={`Playback speed ${speed}×`}
                 className="inline-flex h-8 min-w-10 items-center justify-center px-2 text-[11px] font-medium tabular-nums text-muted-foreground transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -336,6 +420,75 @@ export function MermaidExplainer({
         }`}
         style={fill ? undefined : stageBoxStyle(ratio ?? 0.42, 56, size ?? undefined)}
       />
+    </div>
+  );
+}
+
+function clock(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Where the walk-through is, and a way to go anywhere in it.
+ *
+ * Stepping moves one beat at a time, which is right for a short diagram and
+ * hopeless for a tour of thousands: dragging here jumps straight to any point.
+ * The player renders from time alone, so a jump is exact in either direction.
+ */
+function Scrubber({
+  time,
+  duration,
+  onSeek,
+}: {
+  time: number;
+  duration: number;
+  onSeek: (time: number) => void;
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const seekTo = (clientX: number) => {
+    const bar = barRef.current;
+    if (!bar || duration <= 0) return;
+    const rect = bar.getBoundingClientRect();
+    onSeek(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * duration);
+  };
+  const share = duration > 0 ? Math.min(1, time / duration) : 0;
+  return (
+    <div
+      data-no-pan
+      className="pointer-events-auto flex basis-full items-center gap-2 rounded-lg border border-border/70 bg-background/85 px-2.5 py-1 shadow-sm backdrop-blur-md"
+    >
+      <div
+        ref={barRef}
+        role="slider"
+        tabIndex={-1}
+        aria-label="Playback position"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(duration / 1000)}
+        aria-valuenow={Math.round(time / 1000)}
+        aria-valuetext={`${clock(time)} of ${clock(duration)}`}
+        className="relative flex h-4 flex-1 cursor-pointer items-center"
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          dragging.current = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          seekTo(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (dragging.current) seekTo(event.clientX);
+        }}
+        onPointerUp={() => (dragging.current = false)}
+        onPointerCancel={() => (dragging.current = false)}
+      >
+        <div className="h-1 w-full overflow-hidden rounded-full bg-foreground/15">
+          <div className="h-full rounded-full bg-primary" style={{ width: `${share * 100}%` }} />
+        </div>
+      </div>
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        {clock(time)} / {clock(duration)}
+      </span>
     </div>
   );
 }
