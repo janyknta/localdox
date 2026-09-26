@@ -93,11 +93,7 @@ export function ExportMenu({ file }: { file: MdFile }) {
         aria-expanded={open}
         className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60 coarse:h-11 coarse:w-11"
       >
-        {busy ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Download className="h-4 w-4" />
-        )}
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
       </button>
 
       {open && (
@@ -116,9 +112,7 @@ export function ExportMenu({ file }: { file: MdFile }) {
               >
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium">
-                    {FORMAT_LABEL[format]}
-                  </span>
+                  <span className="block truncate text-sm font-medium">{FORMAT_LABEL[format]}</span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {FORMAT_HINT[format]}
                   </span>

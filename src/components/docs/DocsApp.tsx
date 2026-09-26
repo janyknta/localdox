@@ -1433,6 +1433,65 @@ export function DocsApp() {
     }
   }, []);
 
+  /**
+   * Export a selection of documents, one file each.
+   *
+   * A batch is reported as one outcome rather than one toast per file: five
+   * stacked "Downloaded …" toasts tell the reader nothing they cannot see in
+   * their downloads folder, while "4 of 5" and the name of the one that failed
+   * is the part they cannot get anywhere else.
+   */
+  const downloadFiles = useCallback(async (ids: string[], format: ExportFormat) => {
+    const selected = ids
+      .map((id) => filesRef.current.find((f) => f.id === id))
+      .filter((file): file is MdFile => Boolean(file));
+    if (!selected.length) return;
+
+    const { exportDocuments, FORMAT_LABEL, isBatchable } = await import("@/lib/export");
+
+    // PDF goes through the browser's modal print dialog, so a batch would queue
+    // one per file and make the reader name each by hand. Saying so is better
+    // than starting something they would have to sit through.
+    if (!isBatchable(format)) {
+      toast.error(`${FORMAT_LABEL[format]} exports one document at a time`, {
+        description: "Export the documents individually, or choose another format.",
+      });
+      return;
+    }
+
+    const total = selected.length;
+    const toastId = toast.loading(`Exporting 0 of ${total} as ${FORMAT_LABEL[format]}…`);
+    try {
+      const result = await exportDocuments(selected, format, (done) => {
+        toast.loading(`Exporting ${done} of ${total} as ${FORMAT_LABEL[format]}…`, {
+          id: toastId,
+        });
+      });
+
+      if (!result.failed.length) {
+        toast.success(`Exported ${result.ok} document${result.ok === 1 ? "" : "s"}`, {
+          id: toastId,
+        });
+        return;
+      }
+      // Name the first failure rather than only counting them: with one bad
+      // document in a batch of ten, the name is the whole of the useful part.
+      const [first] = result.failed;
+      const others = result.failed.length - 1;
+      toast.warning(`Exported ${result.ok} of ${total}`, {
+        id: toastId,
+        description:
+          `${first.name}: ${first.reason}` +
+          (others > 0 ? ` (and ${others} other${others === 1 ? "" : "s"})` : ""),
+      });
+    } catch (error) {
+      toast.error("Export failed", {
+        id: toastId,
+        description: error instanceof Error ? error.message : undefined,
+      });
+    }
+  }, []);
+
   const renameFile = useCallback(
     (id: string, newName: string) => {
       setFiles((prev) =>
@@ -2846,6 +2905,7 @@ flowchart LR
                 onAddFiles={() => inputRef.current?.click()}
                 onRemoveFile={moveToBin}
                 onDownloadFile={downloadFile}
+                onDownloadFiles={downloadFiles}
                 onShareFile={shareFile}
                 onShareFiles={(ids) => void shareFiles(ids)}
                 onRenameFile={renameFile}
@@ -2979,6 +3039,7 @@ flowchart LR
                     onAddFiles={() => inputRef.current?.click()}
                     onRemoveFile={moveToBin}
                     onDownloadFile={downloadFile}
+                    onDownloadFiles={downloadFiles}
                     onShareFile={shareFile}
                     onShareFiles={(ids) => void shareFiles(ids)}
                     onRenameFile={renameFile}

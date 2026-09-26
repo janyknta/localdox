@@ -480,7 +480,8 @@ export function parseMarkdownBlocks(source: string): ExportBlock[] {
       paragraph.push(current.trim());
       state.index++;
     }
-    if (paragraph.length) blocks.push({ type: "paragraph", runs: parseInline(paragraph.join(" ")) });
+    if (paragraph.length)
+      blocks.push({ type: "paragraph", runs: parseInline(paragraph.join(" ")) });
   }
 
   return blocks;
