@@ -91,6 +91,42 @@ function kindIcon(kind: DocumentKind): LucideIcon {
   return KIND_ICON[kind] ?? FileIcon;
 }
 
+/*
+ * Colour per file type, and the short label the row shows on its right.
+ *
+ * The glyphs above were already distinct in shape, but every one of them was
+ * drawn in the same muted grey at 14px, where the difference between a sheet
+ * and a document is a couple of pixels of stroke — the list could only be read
+ * by name. Hue is the fastest channel the eye has for this, so each family gets
+ * one and the list becomes scannable before a single word is read.
+ *
+ * The label matters for a second reason: rows drop the file extension, so
+ * "metrics" and "config" gave no clue what they were. The label puts the type
+ * back, in the column that was otherwise empty for every non-text file.
+ */
+const KIND_META: Partial<Record<DocumentKind, { tone: string; label: string }>> = {
+  markdown: { tone: "text-sky-500 dark:text-sky-400", label: "MD" },
+  text: { tone: "text-slate-500 dark:text-slate-400", label: "TXT" },
+  mermaid: { tone: "text-cyan-600 dark:text-cyan-400", label: "DIAGRAM" },
+  board: { tone: "text-fuchsia-500 dark:text-fuchsia-400", label: "BOARD" },
+  docx: { tone: "text-blue-600 dark:text-blue-400", label: "DOCX" },
+  pdf: { tone: "text-rose-500 dark:text-rose-400", label: "PDF" },
+  spreadsheet: { tone: "text-emerald-600 dark:text-emerald-400", label: "SHEET" },
+  csv: { tone: "text-emerald-600 dark:text-emerald-400", label: "CSV" },
+  json: { tone: "text-amber-600 dark:text-amber-400", label: "JSON" },
+  presentation: { tone: "text-orange-500 dark:text-orange-400", label: "DECK" },
+  "google-doc": { tone: "text-blue-600 dark:text-blue-400", label: "DOC" },
+  "google-slide": { tone: "text-orange-500 dark:text-orange-400", label: "SLIDES" },
+  html: { tone: "text-indigo-500 dark:text-indigo-400", label: "HTML" },
+  image: { tone: "text-violet-500 dark:text-violet-400", label: "IMAGE" },
+  video: { tone: "text-pink-500 dark:text-pink-400", label: "VIDEO" },
+  audio: { tone: "text-teal-500 dark:text-teal-400", label: "AUDIO" },
+};
+
+function kindMeta(kind: DocumentKind) {
+  return KIND_META[kind] ?? { tone: "text-muted-foreground", label: "FILE" };
+}
+
 /** Glyph for a saved item, so the Saved list scans by what was starred. */
 function savedIcon(item: SavedItem): LucideIcon {
   if (item.kind === "file") return FileText;
@@ -225,8 +261,6 @@ interface Props {
   onView?: (view: SidebarView) => void;
   /** Opens settings. An optional tab id lands the dialog on that section. */
   onOpenSettings: (tab?: "workspace") => void;
-  /** Open the Saved page, where stars and highlights live together. */
-  onOpenSavedPage?: () => void;
   /** Ids already showing in a side-by-side column. */
   splitFileIds?: string[];
   /** Put this document in a column of its own, beside what is being read. */
@@ -293,7 +327,6 @@ function SidebarImpl({
   view = DEFAULT_VIEW,
   onView,
   onOpenSettings,
-  onOpenSavedPage,
   splitFileIds = [],
   onAddToSplit,
   onAskAi,
@@ -684,6 +717,8 @@ function SidebarImpl({
     const open = expanded[file.id] ?? current;
     const kind = kindOf(file);
     const KindIcon = kindIcon(kind);
+    const meta = kindMeta(kind);
+    const isTextual = kind === "markdown" || kind === "text";
     const mins = readingMinutes(file.content);
     const title = file.name.replace(
       /\.(md|markdown|mdx|mmd|mermaid|excalidraw|txt|docx|pdf|xlsx|xls|csv|json|html|htm|ppt|pptx|gdoc|gslides)$/i,
@@ -739,8 +774,17 @@ function SidebarImpl({
                 }
               : undefined
           }
-          className={`group flex items-center gap-1 rounded-lg px-1 transition-colors ${
-            current ? "bg-accent/60" : ""
+          /*
+           * The active row carries a marker in the left margin as well as a
+           * surface. A tinted fill alone is a low-contrast signal that the eye
+           * has to land on to read; the bar is a hard vertical edge that
+           * registers peripherally, so the reader can keep their attention on
+           * the document and still know where they are in the list.
+           */
+          className={`group relative flex items-center gap-1 rounded-lg px-1 transition-colors duration-150 ${
+            current
+              ? "bg-sidebar-accent before:absolute before:left-0 before:top-1/2 before:h-5 before:w-0.75 before:-translate-y-1/2 before:rounded-r-full before:bg-primary before:content-['']"
+              : "hover:bg-sidebar-accent/50"
           } ${dragActive ? "cursor-grab active:cursor-grabbing" : ""} ${
             isDragging ? "opacity-40" : ""
           } ${isDropTarget ? "ring-2 ring-primary/60" : ""}`}
@@ -773,12 +817,7 @@ function SidebarImpl({
             aria-current={current ? "page" : undefined}
           >
             {!selecting && (
-              <KindIcon
-                className={`h-3.5 w-3.5 shrink-0 ${
-                  current ? "text-primary" : "text-muted-foreground/70"
-                }`}
-                aria-hidden
-              />
+              <KindIcon className={`h-4 w-4 shrink-0 ${meta.tone}`} aria-hidden />
             )}
             <span
               className={`min-w-0 flex-1 truncate text-sm ${
@@ -787,8 +826,16 @@ function SidebarImpl({
             >
               {title}
             </span>
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              {kind === "markdown" || kind === "text" ? `${mins}m` : null}
+            {/* Reading time where there is text to read, the file type where
+                there is not — this column used to render an empty span for
+                every binary file, leaving half the list with a ragged, unused
+                right edge and no indication of what those rows held. */}
+            <span
+              className={`shrink-0 text-[0.6875rem] tabular-nums ${
+                current ? "text-muted-foreground" : "text-muted-foreground/60"
+              } ${isTextual ? "" : "font-semibold tracking-wider"}`}
+            >
+              {isTextual ? `${mins}m` : meta.label}
             </span>
           </button>
           {!selecting ? (
@@ -1074,17 +1121,6 @@ function SidebarImpl({
       </nav>
 
       <div className="flex flex-col gap-1 border-t border-sidebar-border p-2">
-        {/* Saved sits with the workspace controls rather than in the view menu:
-            it is a place the reader goes, not a way of looking at this list. */}
-        {onOpenSavedPage && (
-          <button
-            onClick={onOpenSavedPage}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground coarse:min-h-11"
-          >
-            <Star className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="min-w-0 flex-1 truncate">Saved</span>
-          </button>
-        )}
         {onSwitchWorkspace && (
           <WorkspaceMenu
             variant="sidebar"

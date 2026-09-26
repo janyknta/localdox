@@ -44,11 +44,11 @@ function collectPaths(value: unknown, path: Path, depth: number, out: Map<Path, 
 
 function ValueText({ value }: { value: unknown }) {
   if (typeof value === "string")
-    return <span className="text-emerald-300">&quot;{value}&quot;</span>;
-  if (typeof value === "number") return <span className="text-amber-300">{String(value)}</span>;
+    return <span style={{ color: "var(--code-string)" }}>&quot;{value}&quot;</span>;
+  if (typeof value === "number") return <span style={{ color: "var(--code-number)" }}>{String(value)}</span>;
   if (typeof value === "boolean") return <span className="text-purple-300">{String(value)}</span>;
-  if (value === null) return <span className="text-slate-500">null</span>;
-  return <span className="text-slate-300">{String(value)}</span>;
+  if (value === null) return <span style={{ color: "var(--code-punct)" }}>null</span>;
+  return <span className="text-foreground">{String(value)}</span>;
 }
 
 function Row({
@@ -83,7 +83,7 @@ function Row({
   return (
     <div>
       <div
-        className={`flex items-start rounded ${hit ? "bg-amber-300/20" : ""}`}
+        className={`flex items-start rounded ${hit ? "bg-primary/15" : ""}`}
         style={{ paddingLeft: depth * 14 }}
       >
         {container ? (
@@ -92,7 +92,7 @@ function Row({
             onClick={() => onToggle(path)}
             aria-expanded={expanded}
             aria-label={expanded ? `Collapse ${label ?? "root"}` : `Expand ${label ?? "root"}`}
-            className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-white/10 hover:text-slate-200"
+            className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ChevronRight
               className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
@@ -102,11 +102,11 @@ function Row({
           <span className="h-4 w-4 shrink-0" />
         )}
         <div className="min-w-0 flex-1 break-words pl-1">
-          {label !== null && <span className="text-sky-300">{label}</span>}
-          {label !== null && <span className="text-slate-500">: </span>}
+          {label !== null && <span style={{ color: "var(--code-key)" }}>{label}</span>}
+          {label !== null && <span style={{ color: "var(--code-punct)" }}>: </span>}
           {container ? (
             <span
-              className="cursor-pointer text-slate-500"
+              className="cursor-pointer" style={{ color: "var(--code-punct)" }}
               onClick={() => onToggle(path)}
               role="presentation"
             >
@@ -133,7 +133,7 @@ function Row({
           ))
         : null}
       {expanded && truncated ? (
-        <div className="py-1 text-xs text-slate-500" style={{ paddingLeft: (depth + 1) * 14 }}>
+        <div className="py-1 text-xs text-muted-foreground" style={{ paddingLeft: (depth + 1) * 14 }}>
           Too many nodes to draw here — collapse another branch to see these.
         </div>
       ) : null}
@@ -169,15 +169,15 @@ function JsonTreeImpl({ value, query = "" }: { value: unknown; query?: string })
   const allOpen = open.size === paths.size;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-[#101722]">
+    <div className="overflow-hidden rounded-xl border border-hairline bg-surface-sunken shadow-(--shadow-1)">
       {/* Inside the panel rather than floating above it: these act on the tree
           below, and as a separate row they read as page-level chrome. */}
-      <div className="flex items-center justify-end gap-1 border-b border-white/5 px-2 py-1.5">
+      <div className="flex items-center justify-end gap-1 border-b border-hairline px-2 py-1.5">
         <button
           type="button"
           onClick={() => setOpen(new Set(paths.keys()))}
           disabled={allOpen}
-          className="rounded px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200 disabled:opacity-30 disabled:hover:bg-transparent"
+          className="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
         >
           Expand all
         </button>
@@ -185,12 +185,12 @@ function JsonTreeImpl({ value, query = "" }: { value: unknown; query?: string })
           type="button"
           onClick={() => setOpen(new Set())}
           disabled={open.size === 0}
-          className="rounded px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/5 hover:text-slate-200 disabled:opacity-30 disabled:hover:bg-transparent"
+          className="rounded px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
         >
           Collapse all
         </button>
       </div>
-      <div className="max-h-[calc(100dvh-16rem)] overflow-auto p-4 font-mono text-sm leading-6 text-slate-200">
+      <div className="overflow-x-auto p-4 font-mono text-sm leading-6 text-foreground">
         <Row
           label={null}
           value={value}

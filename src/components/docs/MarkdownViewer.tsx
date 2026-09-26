@@ -46,6 +46,7 @@ import {
   Expand,
   Minimize2,
   ChevronDown,
+  FileText,
 } from "lucide-react";
 import type { MdFile } from "@/lib/markdown-utils";
 import type { ReadingMode } from "@/lib/persistence";
@@ -1627,25 +1628,56 @@ function MarkdownViewerImpl({
 
         {lightbox && <Lightbox {...lightbox} onClose={() => setLightbox(null)} />}
 
-        <div className={`mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}>
+        <div
+          className={`docs-reading-pane mx-auto flex w-full max-w-4xl gap-8 px-6 py-10 md:px-10 md:py-16`}
+        >
           <article
             onMouseUp={() => openCreateMenu()}
             onContextMenu={onContextMenu}
             className="docs-prose mx-auto min-w-0 flex-1"
           >
+            {/*
+             * The masthead.
+             *
+             * A section used to open with its title and a reading time and
+             * nothing else, which left two questions unanswered on every
+             * screen: which document is this, and how far through it am I. The
+             * file name was only ever visible in the sidebar, so with the
+             * sidebar collapsed — or on a phone, where it is a drawer — the
+             * open document had no name at all.
+             *
+             * Three lines, in the order they are wanted: what this is, what
+             * it is called, and what it will cost to read.
+             */}
             {!singleMode && (
-              <div className="mb-8">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <h1 className="text-3xl font-extrabold tracking-tight text-foreground sm:text-4xl wrap-break-word mb-1">
-                      {activeChunk.title}
-                    </h1>
-                    <span className="mt-0.5 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <Clock className="h-3.5 w-3.5" /> ≈ {stats.readingMin} min read
-                    </span>
-                  </div>
-                </div>
-              </div>
+              <header className="mb-10">
+                <p className="mb-3 flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <FileText className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{file.name}</span>
+                  {allChunks.length > 1 && (
+                    <>
+                      <span aria-hidden className="text-border">
+                        /
+                      </span>
+                      <span className="shrink-0 tabular-nums">
+                        {chunkIndex + 1} of {allChunks.length}
+                      </span>
+                    </>
+                  )}
+                </p>
+                <h1 className="wrap-break-word text-pretty text-[2rem] font-[680] leading-[1.12] tracking-[-0.028em] text-foreground sm:text-[2.6rem]">
+                  {activeChunk.title}
+                </h1>
+                <p className="mt-3.5 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5" />≈ {stats.readingMin} min read
+                  </span>
+                  <span aria-hidden className="text-border">
+                    ·
+                  </span>
+                  <span className="tabular-nums">{stats.words.toLocaleString()} words</span>
+                </p>
+              </header>
             )}
 
             {editMode ? (
@@ -2074,63 +2106,47 @@ function remarkInteractiveBlockMeta() {
   };
 }
 
-const CALLOUT_MAP: Record<string, { icon: any; label: string; cls: string }> = {
-  NOTE: {
-    icon: StickyNote,
-    label: "Note",
-    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
-  },
-  INFO: {
-    icon: Info,
-    label: "Info",
-    cls: "border-sky-500/40 bg-sky-500/5 text-sky-700 dark:text-sky-300",
-  },
-  TIP: {
-    icon: Lightbulb,
-    label: "Tip",
-    cls: "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
-  },
-  WARNING: {
-    icon: AlertTriangle,
-    label: "Warning",
-    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
-  },
-  CAUTION: {
-    icon: AlertTriangle,
-    label: "Caution",
-    cls: "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300",
-  },
-  DANGER: {
-    icon: AlertOctagon,
-    label: "Danger",
-    cls: "border-rose-500/40 bg-rose-500/5 text-rose-700 dark:text-rose-300",
-  },
-  IMPORTANT: {
-    icon: AlertOctagon,
-    label: "Important",
-    cls: "border-violet-500/40 bg-violet-500/5 text-violet-700 dark:text-violet-300",
-  },
+/**
+ * The seven GitHub admonition types, collapsed onto four visual tones. Seven
+ * distinct colours would be seven things to learn; the reader only ever needs
+ * to know how loudly a box is speaking, so the tones are graded by urgency —
+ * `info` for context, `success` for advice, `warn` for care, `danger` for
+ * consequences — and the label carries the exact word. Tone is applied by
+ * `data-tone` in `styles.css` rather than by utility classes, so the callout
+ * is themed from the same tokens as the rest of the reader.
+ */
+const CALLOUT_MAP: Record<string, { icon: any; label: string; tone: string }> = {
+  NOTE: { icon: StickyNote, label: "Note", tone: "info" },
+  INFO: { icon: Info, label: "Info", tone: "info" },
+  TIP: { icon: Lightbulb, label: "Tip", tone: "success" },
+  WARNING: { icon: AlertTriangle, label: "Warning", tone: "warn" },
+  CAUTION: { icon: AlertTriangle, label: "Caution", tone: "warn" },
+  DANGER: { icon: AlertOctagon, label: "Danger", tone: "danger" },
+  IMPORTANT: { icon: AlertOctagon, label: "Important", tone: "danger" },
 };
 
+const CALLOUT_RE = /^\s*\[!(NOTE|INFO|TIP|WARNING|CAUTION|DANGER|IMPORTANT)\]\s*(.*)/is;
+
 function Callout({ children, ...rest }: any) {
-  // Detect leading [!TYPE] token in first paragraph
   const kids = Array.isArray(children) ? [...children] : [children];
   let type: string | null = null;
 
+  // The marker is on the blockquote's first *element* child. react-markdown
+  // keeps the newlines between block children as plain strings, so the first
+  // entry in this array is almost always "\n" rather than the paragraph — the
+  // scan used to look at that string, find no `props` on it, and give up
+  // immediately, which is why no callout in any document ever rendered and
+  // every one of them showed its raw `[!NOTE]` marker to the reader.
   for (let i = 0; i < kids.length; i++) {
     const c = kids[i];
-    if (c?.type === "p" || c?.props) {
-      const inner = c.props?.children;
-      const text = extractText(inner);
-      const m = /^\s*\[!(NOTE|INFO|TIP|WARNING|CAUTION|DANGER|IMPORTANT)\]\s*(.*)/is.exec(text);
-      if (m) {
-        type = m[1].toUpperCase();
-        // Strip token: build a new child with remainder
-        const remainder = m[2];
-        kids[i] = remainder ? { ...c, props: { ...c.props, children: remainder } } : null;
-        break;
-      }
-    }
+    if (typeof c === "string" && !c.trim()) continue;
+    if (!c?.props) break;
+    const m = CALLOUT_RE.exec(extractText(c.props.children));
+    if (!m) break;
+    type = m[1].toUpperCase();
+    // Drop the marker, keeping whatever followed it on the same line.
+    const remainder = m[2];
+    kids[i] = remainder ? { ...c, props: { ...c.props, children: remainder } } : null;
     break;
   }
 
@@ -2141,14 +2157,14 @@ function Callout({ children, ...rest }: any) {
   const cfg = CALLOUT_MAP[type];
   const Icon = cfg.icon;
   return (
-    <div className={`my-5 rounded-lg border-l-4 border p-4 ${cfg.cls}`}>
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider">
-        <Icon className="h-3.5 w-3.5" />
-        {cfg.label}
-      </div>
-      <div className="[&>p:last-child]:mb-0 [&>p]:mb-2 text-foreground/90">
+    <aside className="docs-callout" data-tone={cfg.tone} role="note">
+      <span className="docs-callout-mark" aria-hidden>
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="docs-callout-body">
+        <p className="docs-callout-label">{cfg.label}</p>
         {kids.filter(Boolean)}
       </div>
-    </div>
+    </aside>
   );
 }

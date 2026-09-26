@@ -414,7 +414,7 @@ function HtmlFileViewer({
             onChange={(e) => setDraft(e.target.value)}
             spellCheck={false}
             aria-label="Edit HTML source"
-            className="h-[calc(100dvh-16rem)] w-full resize-none rounded-xl border border-border bg-[#101722] p-4 font-mono text-sm leading-6 text-slate-200 outline-none focus:ring-2 focus:ring-primary/20"
+            className="h-[calc(100dvh-16rem)] w-full resize-none rounded-xl border border-hairline bg-surface-sunken p-4 font-mono text-sm leading-6 text-foreground outline-none focus:ring-2 focus:ring-primary/20"
           />
           <p className="mt-2 text-xs text-muted-foreground">
             Editing the page source — changes save automatically.
@@ -448,6 +448,53 @@ function HtmlFileViewer({
         />
       )}
     </ViewerFrame>
+  );
+}
+
+/**
+ * The masthead a non-text file opens with.
+ *
+ * Markdown documents get their title, file name and reading time from the
+ * reader's own header. Everything else — a sheet, a JSON file, a deck — opened
+ * straight into its content with no name anywhere on screen, on the reasoning
+ * that the sidebar already marks the active file. It does, until the sidebar is
+ * collapsed, or the window is narrow enough that it becomes a drawer, or the
+ * reader simply came back to the tab: then the open document is anonymous.
+ *
+ * Costs one line, and gives every file type the same opening as a document.
+ */
+function ViewerMasthead({
+  file,
+  kindLabel,
+  meta,
+  actions,
+}: {
+  file: MdFile;
+  kindLabel: string;
+  /** One short fact about the file, e.g. "9 rows · 5 columns". */
+  meta?: React.ReactNode;
+  actions?: React.ReactNode;
+}) {
+  return (
+    <header className="mb-4 flex items-end justify-between gap-4">
+      <div className="min-w-0">
+        <p className="flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+          <span>{kindLabel}</span>
+          {meta && (
+            <>
+              <span aria-hidden className="font-normal text-border">
+                ·
+              </span>
+              <span className="font-medium normal-case tracking-normal">{meta}</span>
+            </>
+          )}
+        </p>
+        <h1 className="mt-1 truncate text-lg font-semibold tracking-[-0.015em] text-foreground">
+          {file.name}
+        </h1>
+      </div>
+      {actions && <div className="flex shrink-0 items-center gap-1.5">{actions}</div>}
+    </header>
   );
 }
 
@@ -730,6 +777,44 @@ function SpreadsheetViewer({
     return sorted;
   }, [sheet, deferredQuery, sort]);
 
+  /*
+   * Which columns hold figures.
+   *
+   * Decided per column from the body rather than per cell, so one stray "n/a"
+   * in a revenue column does not left-align that one number and break the
+   * column's right edge. A column counts as numeric when it has at least one
+   * number in it and nothing that is clearly not one — empties are ignored,
+   * since a blank tells you nothing about the column's type.
+   *
+   * Sampled from the head of the sheet: a hundred rows settle the question, and
+   * the alternative is walking a 50,000-row export on every render.
+   */
+  const numericColumns = useMemo(() => {
+    const body = sheet?.rows;
+    if (!body || body.length < 2) return [] as boolean[];
+    const width = body[0]?.length ?? 0;
+    const limit = Math.min(body.length, 101);
+    const result: boolean[] = [];
+    for (let c = 0; c < width; c++) {
+      let seen = 0;
+      let numeric = true;
+      for (let r = 1; r < limit; r++) {
+        const cell = body[r]?.[c]?.trim();
+        if (!cell) continue;
+        seen++;
+        // Currency, thousands separators and a trailing percent still describe
+        // a quantity, so they are stripped before the test rather than
+        // disqualifying the column.
+        if (!/^[-+]?[$£€]?\d[\d,\s]*(\.\d+)?%?$/.test(cell)) {
+          numeric = false;
+          break;
+        }
+      }
+      result.push(numeric && seen > 0);
+    }
+    return result;
+  }, [sheet]);
+
   // Only the rows overlapping the scroll window are turned into DOM. Rendering
   // every row of a large export is what made these files unusable: the cost is
   // now bounded by viewport height, not by row count.
@@ -773,22 +858,34 @@ function SpreadsheetViewer({
       ) : !sheet ? (
         <Loading label="Loading spreadsheet" />
       ) : (
-        <div className="p-3 md:p-6">
-          <div className="mx-auto max-w-7xl overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-            <div className="flex flex-wrap items-center gap-3 border-b border-border bg-muted/30 px-3 py-2.5">
-              <div className="relative min-w-56 flex-1">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <div className="mx-auto max-w-7xl p-4 md:p-7">
+          <ViewerMasthead
+            file={file}
+            kindLabel={/\.csv$/i.test(file.name) ? "CSV" : "Spreadsheet"}
+            meta={
+              <>
+                {rows.length.toLocaleString()} {rows.length === 1 ? "row" : "rows"} ·{" "}
+                {headers.length} {headers.length === 1 ? "column" : "columns"}
+              </>
+            }
+            actions={
+              /* The search field used to be the first thing in the panel and
+                 ran the full width of it — a control sized for a thousand rows
+                 sitting above nine. It is a filter, so it is sized like one and
+                 placed with the other controls. */
+              <div className="relative w-52">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search cells"
-                  className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                  placeholder="Filter rows"
+                  aria-label="Filter rows"
+                  className="h-9 w-full rounded-lg border border-border bg-background pl-8 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
                 />
               </div>
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <Filter className="h-3.5 w-3.5" /> {rows.length} rows
-              </span>
-            </div>
+            }
+          />
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-(--shadow-1)">
             {sheets.length > 1 && (
               <div className="flex gap-1 overflow-x-auto border-b border-border px-2 pt-2">
                 {sheets.map((item, index) => (
@@ -831,14 +928,30 @@ function SpreadsheetViewer({
                               : { column, direction: 1 },
                           )
                         }
-                        className="sticky top-0 z-10 cursor-pointer whitespace-nowrap bg-muted px-3 py-2 text-xs font-semibold text-foreground hover:bg-accent"
+                        aria-sort={
+                          sort?.column === column
+                            ? sort.direction === 1
+                              ? "ascending"
+                              : "descending"
+                            : "none"
+                        }
+                        /* A numeric column's heading follows its figures to the
+                           right edge. A heading that sits left of the column it
+                           labels reads as belonging to the column beside it. */
+                        className={`sticky top-0 z-10 cursor-pointer select-none whitespace-nowrap bg-muted px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-accent ${
+                          numericColumns[column] ? "text-right" : "text-left"
+                        }`}
                       >
                         {header || `Column ${column + 1}`}
-                        {sort?.column === column ? (
-                          <span className="ml-1 text-primary">
-                            {sort.direction === 1 ? "↑" : "↓"}
-                          </span>
-                        ) : null}
+                        {/* The caret holds its space whether or not the column
+                            is the sorted one, so clicking through the headings
+                            does not shunt every other column sideways. */}
+                        <span
+                          aria-hidden
+                          className={`ml-1 inline-block w-2 ${sort?.column === column ? "text-primary" : "text-transparent"}`}
+                        >
+                          {sort?.column === column && sort.direction === -1 ? "↓" : "↑"}
+                        </span>
                       </th>
                     ))}
                   </tr>
@@ -861,7 +974,17 @@ function SpreadsheetViewer({
                         {headers.map((_, column) => (
                           <td
                             key={column}
-                            className="whitespace-nowrap border-t border-border px-3 py-2 text-foreground/85"
+                            /* Figures are set right-aligned and tabular, so
+                               digits line up in columns and the eye can compare
+                               magnitudes down the column without reading a
+                               single number. Left-aligned proportional figures
+                               — what this was — make 2840000 and 412 look the
+                               same length. Text stays left. */
+                            className={`whitespace-nowrap border-t border-hairline px-3 py-2 text-foreground/85 ${
+                              numericColumns[column]
+                                ? "text-right font-medium tabular-nums"
+                                : "text-left"
+                            }`}
                           >
                             {row[column]}
                           </td>
@@ -1087,6 +1210,15 @@ function JsonViewer({
         </Suspense>
       ) : (
         <div className="mx-auto max-w-6xl px-4 py-6 md:px-8">
+          <ViewerMasthead
+            file={file}
+            kindLabel="JSON"
+            meta={
+              parsed && !editing
+                ? `${lines.length.toLocaleString()} ${lines.length === 1 ? "line" : "lines"}`
+                : undefined
+            }
+          />
           {editing ? (
             <div>
               <textarea
@@ -1094,7 +1226,7 @@ function JsonViewer({
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
                 aria-label="Edit JSON"
-                className={`h-[calc(100dvh-13rem)] w-full resize-none rounded-xl border bg-[#101722] p-4 font-mono text-sm leading-6 text-slate-200 outline-none focus:ring-2 ${
+                className={`h-[calc(100dvh-13rem)] w-full resize-none rounded-xl border bg-surface-sunken p-4 font-mono text-sm leading-6 text-foreground outline-none focus:ring-2 ${
                   draftError
                     ? "border-destructive focus:ring-destructive/20"
                     : "border-border focus:ring-primary/20"
@@ -1110,11 +1242,11 @@ function JsonViewer({
           ) : parsed ? (
             <JsonTree value={parsed.value} />
           ) : (
-            <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-border bg-[#101722] p-4 text-sm leading-6 text-slate-200">
+            <pre className="max-h-[calc(100dvh-13rem)] overflow-auto rounded-xl border border-hairline bg-surface-sunken p-4 text-sm leading-6 text-foreground">
               <code>
                 {lines.map((line, index) => (
                   <div key={index}>
-                    <span className="mr-5 inline-block w-7 select-none text-right text-slate-500">
+                    <span className="mr-5 inline-block w-7 select-none text-right text-muted-foreground/70">
                       {index + 1}
                     </span>
                     {line}
