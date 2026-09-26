@@ -250,8 +250,6 @@ interface Props {
   onView?: (view: SidebarView) => void;
   /** Opens settings. An optional tab id lands the dialog on that section. */
   onOpenSettings: (tab?: "workspace") => void;
-  /** Open the Saved page, where stars and highlights live together. */
-  onOpenSavedPage?: () => void;
   /** Ids already showing in a side-by-side column. */
   splitFileIds?: string[];
   /** Put this document in a column of its own, beside what is being read. */
@@ -318,7 +316,6 @@ function SidebarImpl({
   view = DEFAULT_VIEW,
   onView,
   onOpenSettings,
-  onOpenSavedPage,
   splitFileIds = [],
   onAddToSplit,
   onAskAi,
@@ -1103,17 +1100,6 @@ function SidebarImpl({
       </nav>
 
       <div className="flex flex-col gap-1 border-t border-sidebar-border p-2">
-        {/* Saved sits with the workspace controls rather than in the view menu:
-            it is a place the reader goes, not a way of looking at this list. */}
-        {onOpenSavedPage && (
-          <button
-            onClick={onOpenSavedPage}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm text-foreground/80 transition-colors hover:bg-accent hover:text-foreground coarse:min-h-11"
-          >
-            <Star className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-            <span className="min-w-0 flex-1 truncate">Saved</span>
-          </button>
-        )}
         {onSwitchWorkspace && (
           <WorkspaceMenu
             variant="sidebar"

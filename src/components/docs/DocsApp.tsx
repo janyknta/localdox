@@ -2293,13 +2293,6 @@ flowchart LR
     [navigate],
   );
 
-  /** Open the Saved page — a real route, so it is linkable and in the trail. */
-  const openSavedPage = useCallback(() => {
-    navigate({ to: "/saved" });
-    navHistoryRef.current.push({ path: "/saved", fileId: null, headingId: null });
-    setDrawerOpen(false);
-  }, [navigate]);
-
   // Closing the dialog is a route change back to the reader. Going through the
   // trail rather than straight to "/" keeps whatever document was open, and
   // means the close button, Escape, the backdrop and back all do one thing.
@@ -2762,7 +2755,6 @@ flowchart LR
                 highlights={highlights}
                 onRemoveHighlight={removeHighlight}
                 onOpenSettings={openSettings}
-                onOpenSavedPage={openSavedPage}
                 onAddToSplit={openBeside}
                 splitFileIds={splitFileIds}
                 onAskAi={aiEnabled ? openAskAi : undefined}
