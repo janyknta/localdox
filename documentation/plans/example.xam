@@ -1,0 +1,57 @@
+# Exam
+
+:::question{#odd type=mcq marks=2 difficulty=easy}
+Which number is odd?
+
+- 14
+- 21
+- 30
+- 42
+:::
+
+:::question{#select-even type=msq marks=2 difficulty=easy}
+Select all even numbers.
+
+- 2
+- 4
+- 5
+- 7
+:::
+
+:::question{#third type=nat marks=2 difficulty=medium}
+Enter $7/3$ to two decimal places.
+:::
+
+:::question{#reach type=mcq marks=2 difficulty=hard}
+In this graph, which node can you reach from **S**?
+
+```mermaid
+flowchart LR
+  S --> A
+  A --> B
+  C --> S
+```
+
+- C
+- B
+- Neither
+- A
+:::
+
+# Solutions
+
+:::solution{#odd answer=B}
+21 leaves a remainder of 1 when divided by 2. The others are multiples of 2.
+:::
+
+:::solution{#select-even answer="A,B"}
+2 and 4 are divisible by 2; 5 is not.
+:::
+
+:::solution{#third answer=2.32:2.34}
+$7/3 = 2.333\ldots$, so any value from 2.32 to 2.34 is accepted.
+:::
+
+:::solution{#reach answer=B}
+Follow the arrows: S → A → B. The edge between C and S points into S, so C is not reachable.
+:::

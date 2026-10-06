@@ -6,8 +6,10 @@
  * those facts are worded and when they are worth showing.
  */
 import type { Ruleset } from "../schema.ts";
+import type { ExamSetup } from "../exam-setup.ts";
 import type { Question, QuestionType } from "../parser.ts";
 import { questionState, type Session } from "../session.ts";
+import { isAnswered, type Response } from "../scoring.ts";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAY = 86_400_000;
@@ -44,6 +46,24 @@ export function formatDuration(totalSeconds: number): string {
   const h = Math.floor(s / 3600),
     m = Math.round((s % 3600) / 60);
   return m === 60 ? `${h + 1}h` : m ? `${h}h ${m}m` : `${h}h`;
+}
+/**
+ * A variation's rules as short facts: "10m", "4 questions", "70% to pass",
+ * "3 attempts", marking. Shared by the upload step and the `.xrule` preview.
+ */
+export function setupFacts(setup: ExamSetup): string[] {
+  const n = setup.maxAttempts;
+  return [
+    formatDuration(setup.durationMinutes * 60),
+    ...(setup.questionCount ? [`${setup.questionCount} questions`] : []),
+    `${setup.passPercentage}% to pass`,
+    `${n} attempt${n === 1 ? "" : "s"}`,
+    setup.rootRules
+      ? "Marking from exam structure"
+      : setup.mcqPenalty === "none"
+        ? "No negative marking"
+        : `−${setup.mcqPenalty === "third" ? "1/3" : "1/4"} for a wrong MCQ`,
+  ];
 }
 /** "03:59:12" for the exam clock (tabular digits, fixed width). */
 export function formatClock(totalSeconds: number): string {
@@ -225,15 +245,47 @@ export function ruleNotes(r: Ruleset): string[] {
         r.tools.calculator === "scientific" ? " (angles in radians)" : ""
       }.`,
     );
-  if (r.navigation.markForReview)
-    notes.push(
-      r.navigation.markedForReviewAnswerCounts
-        ? "Answers marked for review are counted."
-        : "Answers marked for review are not counted.",
-    );
   if (!r.navigation.free) notes.push("Questions go in order; you can't go back.");
-  notes.push("Keyboard: A–D to choose, N next, P previous, M mark for review.");
+  notes.push(
+    `Keyboard: A–D to choose, N ${r.navigation.requireSave ? "save & next" : "next"}, P previous, M mark for review.`,
+  );
   return notes;
+}
+/**
+ * How an answer is kept, cleared and marked, in the exam's own button names.
+ * With `requireSave` this is the rule candidates most often get wrong in a
+ * TCS iON hall, so it comes first and says what drops an answer.
+ */
+export function answeringSteps(r: Ruleset): string[] {
+  const n = r.navigation,
+    l = uiProfile(r).labels,
+    steps: string[] = [];
+  if (n.requireSave) {
+    const away = [
+      "the question palette",
+      ...(n.free ? [l.previous] : []),
+      ...(r.sections.length > 1 ? ["a section tab"] : []),
+    ];
+    steps.push(
+      `Choosing an answer doesn't save it. ${l.saveNext} saves it and opens the next question${
+        n.markForReview ? `; ${l.markNext} saves it and marks it for review` : ""
+      }.`,
+      `Leaving a question any other way (${away.join(", ")}) drops an answer you haven't saved.`,
+    );
+  } else steps.push("Each answer is saved as soon as you choose it.");
+  if (n.clearResponse)
+    steps.push(
+      `${l.clear} removes the answer${n.requireSave ? ". With a single-answer question you can also click the chosen option again" : ""}.`,
+    );
+  if (n.markForReview) {
+    steps.push(
+      n.markedForReviewAnswerCounts
+        ? "A question you answered and marked for review is still evaluated."
+        : "A question marked for review isn't evaluated, even if answered.",
+    );
+    if (n.requireSave) steps.push(`${l.saveNext} on a marked question removes its mark.`);
+  }
+  return steps;
 }
 /** Violation notice: "Warning 1 of 3: stay in fullscreen." */
 export function violationCopy(r: Ruleset, violations: number): string {
@@ -318,6 +370,13 @@ export function statusCounts(s: Session, ids: string[]): StatusCounts {
     if (status === "marked" || status === "answered_marked") counts.marked++;
   }
   return counts;
+}
+/** Two responses that record the same answer: MSQ order doesn't matter, and blanks match. */
+export function sameResponse(a: Response, b: Response): boolean {
+  if (!isAnswered(a) || !isAnswered(b)) return isAnswered(a) === isAnswered(b);
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((v) => b.includes(v));
+  return a === b;
 }
 export function sectionIds(s: Session, paper: Question[], sectionId: string): string[] {
   return s.order.filter((id) => paper.find((q) => q.id === id)?.section === sectionId);
@@ -404,7 +463,9 @@ const quote = (field: string) => `“${field}”`;
 /** "plan.json.days.0.title" → { file: "plan.json", field: "days[0].title" }. */
 function splitLocation(location: string): { file?: string; line?: string; field?: string } {
   // A root-level schema issue arrives as "file.json." (empty path).
-  const m = /^(.*?\.(?:json|md))(?::(\d+))?(?:\.(.+))?$/.exec(location.replace(/\.$/, ""));
+  const m = /^(.*?\.(?:json|md|xam|xrule))(?::(\d+))?(?:\.(.+))?$/.exec(
+    location.replace(/\.$/, ""),
+  );
   const field = (m ? m[3] : location)?.replace(/\.(\d+)(?=\.|$)/g, "[$1]");
   return m ? { file: m[1], line: m[2], field: field || undefined } : { field };
 }
