@@ -15,7 +15,6 @@ export interface ExamWorkspace {
    * writer lock) so Settings can manage or delete exam data.
    */
   paused: boolean;
-  configureFile: (fileId: string) => void;
   files: MdFile[];
   folders: { id: string; parentId?: string | null }[];
   /** Show a ruleset where rulesets are edited: Settings ▸ Exam rules. */
