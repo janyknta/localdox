@@ -9,19 +9,14 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as MdReaderRouteImport } from './routes/md-reader'
-import { Route as CodeStudioRouteImport } from './routes/code-studio'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CodeStudioRouteImport } from './routes/code-studio'
+import { Route as MdReaderRouteImport } from './routes/md-reader'
+import { Route as SettingsRouteImport } from './routes/settings'
 
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MdReaderRoute = MdReaderRouteImport.update({
-  id: '/md-reader',
-  path: '/md-reader',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CodeStudioRoute = CodeStudioRouteImport.update({
@@ -29,9 +24,14 @@ const CodeStudioRoute = CodeStudioRouteImport.update({
   path: '/code-studio',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const MdReaderRoute = MdReaderRouteImport.update({
+  id: '/md-reader',
+  path: '/md-reader',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -71,18 +71,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/md-reader': {
-      id: '/md-reader'
-      path: '/md-reader'
-      fullPath: '/md-reader'
-      preLoaderRoute: typeof MdReaderRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/code-studio': {
@@ -92,11 +85,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CodeStudioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/md-reader': {
+      id: '/md-reader'
+      path: '/md-reader'
+      fullPath: '/md-reader'
+      preLoaderRoute: typeof MdReaderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
