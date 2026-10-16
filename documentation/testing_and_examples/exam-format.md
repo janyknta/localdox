@@ -1,8 +1,8 @@
 # Exam Session format (schema version 2)
 
-> Exams are now two files in an Exam Workspace: a `.xam` paper and its `.xrule` rules. See [Exam files](../documentation/exam-files.md). The app no longer imports the multi-file format below (`.exam.json`, `.paper.md`, `.solutions.md`, `.taxonomy.json`). Its **ruleset reference still applies**: it is what an `.xrule`'s `rules` block contains.
+> Exams are now two files in a workspace: a `.xam` paper and its `.xrule` rules. See [Exam files](../documentation/exam-files.md). The app no longer imports the multi-file format below (`.exam.json`, `.paper.md`, `.solutions.md`, `.taxonomy.json`). Its **ruleset reference still applies**: it is what an `.xrule`'s `rules` block contains.
 
-Data stays offline in the browser and is scoped to its owning workspace. See [Exam Workspaces](../documentation/exam-sessions.md) for workspace setup.
+Data stays offline in the browser and is scoped to its owning workspace. See [Workspaces](../documentation/exam-sessions.md) for workspace setup.
 
 For bundled content, add files to `exams/<exam-id>/` and rebuild. Vite discovers every `*.exam.json` automatically; no registry or engine code change is needed. Companion files must share a stem (`quiz.exam.json`, `quiz.paper.md`, `quiz.solutions.md`). Shared taxonomies live in `exams/taxonomies/`. Import also works without rebuilding. Taxonomy references resolve by their filename within the selected files; duplicate filenames are rejected. Reimporting an exam replaces its library entry; existing attempts retain their own immutable copy.
 

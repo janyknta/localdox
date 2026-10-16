@@ -1,5 +1,5 @@
-// Notes: the clean copy of a selection, the snapshot model, following a note
-// back to its source, and the note's journey through storage.
+// Notes: the clean copy of a selection, and the Notes list read out of the
+// documents that keep notes and highlights (lib/markdown/annotations.ts).
 //
 // The DOM half of the clean copy is exercised against a small hand-built DOM
 // (selection-markdown reads nodes through a structural interface for exactly
@@ -7,7 +7,6 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 import {
   selectionToMarkdown,
@@ -15,34 +14,12 @@ import {
   type SelectionBounds,
 } from "../src/lib/markdown/selection-markdown.ts";
 import {
-  createNote,
-  editNote,
-  highlightSource,
-  MAX_NOTE_CHARS,
+  documentEntries,
   notebookEntries,
-  resolveNoteSource,
-  searchHighlights,
-  searchNotes,
-  sortNotes,
-  type Note,
+  pageOf,
+  searchEntries,
 } from "../src/lib/workspace/notes.ts";
-import type { Highlight } from "../src/lib/markdown/dom-highlighter.ts";
-import {
-  newWorkspaceRecord,
-  parseWorkspaceImport,
-  persistence,
-  serializeWorkspace,
-  ImportValidationError,
-  type WorkspaceRecord,
-} from "../src/lib/workspace/persistence.ts";
-import { mergeWorkspaces } from "../src/lib/workspace/merge.ts";
-import {
-  applyToDestination,
-  planTransfer,
-  removeFromSource,
-} from "../src/lib/workspace/workspace-transfer.ts";
-
-Object.assign(globalThis, { indexedDB, IDBKeyRange });
+import { notesToMarkdown } from "../src/lib/workspace/notes-markdown.ts";
 
 // ---- a minimal DOM -----------------------------------------------------------
 
@@ -371,370 +348,84 @@ test("a selection of nothing convertible is empty, so the caller can fall back",
 
 // ---- the snapshot model ----------------------------------------------------------
 
+// ---- the Notes list ------------------------------------------------------------
+
 const DOC = [
-  "Intro paragraph before any heading.",
+  "# Install",
   "",
-  "# Getting started",
+  "Run the installer once.",
   "",
-  "Install the command line tool with your package manager first.",
+  "```yellownote Setup",
+  "installer",
+  "```",
   "",
-  "## Configure",
+  "# Configure",
   "",
-  "Set the output directory before the first build runs.",
+  "Set the output directory.",
   "",
-  "# Reference",
-  "",
-  "Every flag is documented on this page in alphabetical order.",
+  "```note",
+  "Use **dist/** for builds.",
+  "```",
 ].join("\n");
 
-const file = (content = DOC, extra: Partial<{ deletedAt: number | null }> = {}) => ({
-  id: "doc",
-  name: "guide.md",
+const doc = (id: string, content: string, extra: Record<string, unknown> = {}) => ({
+  id,
+  name: `${id}.md`,
   content,
   ...extra,
 });
 
-function noteFor(quote: string, source: Partial<Note["source"]> = {}): Note {
-  return createNote({ content: quote, source: { quote, ...source } }, file(), 1_000);
-}
-
-test("a note is a snapshot: its content only changes through an explicit edit", () => {
-  const note = createNote(
-    { content: "**Install** the tool", source: { quote: "Install the tool" } },
-    { id: "doc", name: "guide.md" },
-    1_000,
-  );
-  assert.equal(note.fileId, "doc");
-  assert.equal(note.fileName, "guide.md");
-  assert.equal(note.createdAt, 1_000);
-  assert.equal(note.updatedAt, 1_000);
-
-  // Editing the source document is not an operation on notes at all; the
-  // only way content changes is `editNote`, which stamps the time.
-  const edited = editNote(note, "Install it", 2_000);
-  assert.equal(edited.content, "Install it");
-  assert.equal(edited.updatedAt, 2_000);
-  assert.equal(edited.createdAt, 1_000);
-  assert.equal(note.content, "**Install** the tool", "the original object is untouched");
-  assert.equal(editNote(edited, "Install it", 3_000), edited, "a no-op edit keeps the timestamp");
-
-  const huge = createNote(
-    { content: "x".repeat(MAX_NOTE_CHARS + 10), source: { quote: "x" } },
-    {
-      id: "doc",
-      name: "guide.md",
-    },
-  );
-  assert.equal(huge.content.length, MAX_NOTE_CHARS);
-});
-
-test("search matches every word across content, current source name and section", () => {
-  const a = { ...noteFor("Alpha beta"), id: "a", createdAt: 1 };
-  const b = {
-    ...noteFor("Gamma"),
-    id: "b",
-    fileId: "other",
-    fileName: "old-name.md",
-    createdAt: 2,
-    source: { quote: "Gamma", sectionTitle: "Results" },
-  };
-  const nameOf = (id: string) => (id === "other" ? "renamed.md" : "guide.md");
+test("entries come from the documents, by file order then place, with stable ids", () => {
+  const entries = notebookEntries([
+    doc("b", DOC),
+    doc("pdf", "```note\nnot markdown\n```", { kind: "pdf" }),
+    doc("binned", "```note\nin the bin\n```", { deletedAt: 1 }),
+    doc("a", "Plain.\n\n```note\nsecond file\n```\n"),
+  ]);
   assert.deepEqual(
-    searchNotes([a, b], "renamed gamma", nameOf).map((n) => n.id),
-    ["b"],
-  );
-  assert.deepEqual(
-    searchNotes([a, b], "old-name", nameOf).map((n) => n.id),
-    [],
-    "a renamed document is found by the name the reader sees now",
-  );
-  assert.deepEqual(
-    searchNotes([a, b], "RESULTS", nameOf).map((n) => n.id),
-    ["b"],
-  );
-  assert.deepEqual(
-    searchNotes([a, b], "  ", nameOf).map((n) => n.id),
-    ["a", "b"],
-  );
-  assert.deepEqual(
-    sortNotes([a, b]).map((n) => n.id),
-    ["b", "a"],
-  );
-});
-
-// ---- highlights in the Notes list ------------------------------------------------
-
-const hl = (id: string, extra: Partial<Highlight> = {}): Highlight => ({
-  id,
-  fileId: "doc",
-  text: `Highlighted ${id}`,
-  color: "#fde047",
-  ...extra,
-});
-
-test("highlights interleave with notes by time; undated ones follow, latest added first", () => {
-  const note = (id: string, createdAt: number) => ({ ...noteFor(id), id, createdAt });
-  const entries = notebookEntries(
-    [note("n-old", 1_000), note("n-new", 3_000)],
-    [hl("h-legacy-1"), hl("h-mid", { createdAt: 2_000 }), hl("h-legacy-2")],
-  );
-  assert.deepEqual(
-    entries.map((entry) => (entry.kind === "note" ? entry.note.id : entry.highlight.id)),
-    ["n-new", "h-mid", "n-old", "h-legacy-2", "h-legacy-1"],
-  );
-});
-
-test("highlight search covers its text, label, document name and page", () => {
-  const a = hl("a", { text: "Alpha passage", label: "check later" });
-  const b = hl("b", { fileId: "other", text: "Gamma", subtopicId: "results" });
-  const nameOf = (id: string) => (id === "other" ? "report.md" : "guide.md");
-  const sectionOf = (h: Highlight) => (h.subtopicId === "results" ? "Results" : undefined);
-  const ids = (query: string) =>
-    searchHighlights([a, b], query, nameOf, sectionOf).map((h) => h.id);
-  assert.deepEqual(ids("alpha"), ["a"]);
-  assert.deepEqual(ids("LATER"), ["a"], "the reader's label is searchable");
-  assert.deepEqual(ids("report gamma"), ["b"], "every word, across fields");
-  assert.deepEqual(ids("results"), ["b"]);
-  assert.deepEqual(ids(" "), ["a", "b"]);
-});
-
-test("a highlight is followed back to its page like a note", () => {
-  const highlight = hl("h", {
-    text: "Every flag is documented on this page in alphabetical order.",
-    subtopicId: "reference",
-    start: 0,
-  });
-  const status = resolveNoteSource({ source: highlightSource(highlight) }, file());
-  assert.equal(status.kind, "found");
-  assert.equal(status.kind === "found" && status.subtopicId, "reference");
-  assert.equal(
-    resolveNoteSource({ source: highlightSource(hl("gone", { text: "no such words" })) }, file())
-      .kind,
-    "missing-passage",
-  );
-});
-
-// ---- following a note back -------------------------------------------------------
-
-test("a source anchor resolves to the page the passage is on", () => {
-  const note = noteFor("Set the output directory before the first build runs.", {
-    subtopicId: "getting-started",
-  });
-  assert.deepEqual(resolveNoteSource(note, file()), {
-    kind: "found",
-    subtopicId: "getting-started",
-    moved: false,
-  });
-});
-
-test("a moved passage is followed to its new page", () => {
-  const note = noteFor("Set the output directory before the first build runs.", {
-    subtopicId: "getting-started",
-  });
-  const moved = DOC.replace("Set the output directory before the first build runs.\n", "").concat(
-    "\n\nSet the output directory before the first build runs.",
-  );
-  assert.deepEqual(resolveNoteSource(note, file(moved)), {
-    kind: "found",
-    subtopicId: "reference",
-    moved: true,
-  });
-  // Text inserted above shifts every offset; the quote still finds it.
-  const shifted = "New opening line.\n\n".repeat(20) + DOC;
-  assert.deepEqual(resolveNoteSource(note, file(shifted)), {
-    kind: "found",
-    subtopicId: "getting-started",
-    moved: false,
-  });
-});
-
-test("a repeated passage resolves to the reader's own page first", () => {
-  const twice = `${DOC}\n\nInstall the command line tool with your package manager first.`;
-  const fromReference = noteFor("Install the command line tool with your package manager first.", {
-    subtopicId: "reference",
-  });
-  assert.equal(
-    (resolveNoteSource(fromReference, file(twice)) as { subtopicId: string }).subtopicId,
-    "reference",
-  );
-});
-
-test("a quote that crossed rendered-only text still anchors by its own lines", () => {
-  // Selection text over KaTeX carries glyphs the Markdown never contains.
-  const content =
-    "# Physics\n\nThe famous relation $E = mc^2$ holds here.\n\nMass and energy are equivalent in every frame.";
-  const note = noteFor(
-    "The famous relation E=mc2E = mc^2 holds here.\nMass and energy are equivalent in every frame.",
-    {
-      subtopicId: "physics",
-    },
-  );
-  assert.deepEqual(resolveNoteSource(note, file(content)), {
-    kind: "found",
-    subtopicId: "physics",
-    moved: false,
-  });
-});
-
-test("a broken anchor reports the passage gone and opens where it was", () => {
-  const note = noteFor("Set the output directory before the first build runs.", {
-    subtopicId: "getting-started",
-    headingId: "configure",
-  });
-  const rewritten = DOC.replace(
-    "Set the output directory before the first build runs.",
-    "Pick an output folder.",
-  );
-  assert.deepEqual(resolveNoteSource(note, file(rewritten)), {
-    kind: "missing-passage",
-    target: "configure",
-  });
-  // The heading went too: fall back to the page.
-  const noHeading = rewritten.replace("## Configure", "## Output");
-  assert.deepEqual(resolveNoteSource(note, file(noHeading)), {
-    kind: "missing-passage",
-    target: "getting-started",
-  });
-  // Nothing left to point at.
-  const gutted = "# Something else\n\nUnrelated.";
-  assert.deepEqual(resolveNoteSource(note, file(gutted)), {
-    kind: "missing-passage",
-    target: null,
-  });
-});
-
-test("a short or common line is not trusted to re-anchor a lost passage", () => {
-  // The selection's long line was rewritten; its short line ("Configure")
-  // still exists elsewhere, but is too weak to claim the passage survived.
-  const note = noteFor("Configure\nThe old explanation of output folders that was deleted.", {
-    subtopicId: "getting-started",
-  });
-  assert.equal(resolveNoteSource(note, file()).kind, "missing-passage");
-});
-
-test("a binned or deleted source is reported, not followed", () => {
-  const note = noteFor("Install the command line tool with your package manager first.");
-  assert.deepEqual(resolveNoteSource(note, file(DOC, { deletedAt: 5 })), { kind: "binned" });
-  assert.deepEqual(resolveNoteSource(note, undefined), { kind: "missing-document" });
-});
-
-// ---- storage -------------------------------------------------------------------------
-
-function workspaceWithNotes(): WorkspaceRecord {
-  const ws = newWorkspaceRecord("Research");
-  ws.files = [{ id: "doc", name: "guide.md", content: DOC }];
-  ws.notes = [
-    {
-      ...noteFor("Install the command line tool with your package manager first.", {
-        subtopicId: "getting-started",
-        headingId: "getting-started",
-        sectionTitle: "Getting started",
-        prefix: "Getting started",
-        suffix: "Configure",
-        start: 0,
-        end: 63,
-      }),
-      id: "n1",
-      content: "Install the **command line** tool.",
-      updatedAt: 4_000,
-    },
-    // Its document is gone; the note stays — it is a snapshot.
-    { ...noteFor("Orphaned passage"), id: "n2", fileId: "deleted-doc", fileName: "old.md" },
-  ];
-  return ws;
-}
-
-test("notes survive a backup export and import, including notes whose source is gone", async () => {
-  const ws = workspaceWithNotes();
-  const restored = parseWorkspaceImport(await serializeWorkspace(ws));
-  assert.deepEqual(restored.notes, ws.notes);
-});
-
-test("a highlight keeps its time through a backup, so it keeps its place among notes", async () => {
-  const ws = workspaceWithNotes();
-  ws.highlights = [hl("dated", { createdAt: 5_000 }), hl("legacy")];
-  const restored = parseWorkspaceImport(await serializeWorkspace(ws));
-  assert.equal(restored.highlights?.find((h) => h.id === "dated")?.createdAt, 5_000);
-  assert.equal(restored.highlights?.find((h) => h.id === "legacy")?.createdAt, undefined);
-});
-
-test("a backup written before notes existed imports with none", async () => {
-  const ws = newWorkspaceRecord("Old");
-  ws.files = [{ id: "doc", name: "guide.md", content: DOC }];
-  const json = JSON.parse(await serializeWorkspace(ws));
-  delete json.workspace.notes;
-  assert.deepEqual(parseWorkspaceImport(JSON.stringify(json)).notes, []);
-});
-
-test("imported notes are validated: malformed fields are repaired, duplicates rejected", async () => {
-  const ws = workspaceWithNotes();
-  const json = JSON.parse(await serializeWorkspace(ws));
-  json.workspace.notes[0].updatedAt = "yesterday";
-  json.workspace.notes[0].source = 42;
-  const repaired = parseWorkspaceImport(JSON.stringify(json)).notes!;
-  assert.equal(repaired[0].updatedAt, repaired[0].createdAt);
-  assert.deepEqual(repaired[0].source, { quote: "" });
-
-  json.workspace.notes[1].id = json.workspace.notes[0].id;
-  assert.throws(() => parseWorkspaceImport(JSON.stringify(json)), ImportValidationError);
-
-  json.workspace.notes = [{ id: "x", fileId: "doc", content: 7 }];
-  assert.throws(() => parseWorkspaceImport(JSON.stringify(json)), ImportValidationError);
-});
-
-test("notes survive a reload: IndexedDB stores and returns them unchanged", async () => {
-  const ws = workspaceWithNotes();
-  await persistence.putWorkspace(ws);
-  const back = await persistence.getWorkspace(ws.id);
-  assert.deepEqual(back?.notes, ws.notes);
-});
-
-test("two tabs taking notes at once both keep theirs", () => {
-  const base = workspaceWithNotes();
-  const mine = { ...base, notes: [...base.notes!, { ...noteFor("Mine"), id: "mine" }] };
-  const theirs = {
-    ...base,
-    revision: "r2",
-    notes: [
-      editNote(base.notes![0], "Edited in the other tab", 9_000),
-      base.notes![1],
-      { ...noteFor("Theirs"), id: "theirs" },
+    entries.map((e) => [e.id, e.kind, e.body]),
+    [
+      ["b#0", "highlight", "installer"],
+      ["b#1", "note", "Use **dist/** for builds."],
+      ["a#0", "note", "second file"],
     ],
-  };
-  const merged = mergeWorkspaces(base, mine, theirs)!;
-  assert.deepEqual(merged.notes!.map((n) => n.id).sort(), ["mine", "n1", "n2", "theirs"]);
-  assert.equal(merged.notes!.find((n) => n.id === "n1")!.content, "Edited in the other tab");
-  assert.ok(
-    merged.notes!.some((n) => n.fileId === "deleted-doc"),
-    "a note is not dropped because its source is gone",
   );
-
-  // The same note edited differently in both tabs is a real conflict.
-  const clash = {
-    ...mine,
-    notes: [editNote(base.notes![0], "Mine instead", 9_500), base.notes![1]],
-  };
-  assert.equal(mergeWorkspaces(base, clash, theirs), null);
+  assert.equal(entries[0].color, "yellow");
+  assert.equal(entries[0].label, "Setup");
+  assert.ok(entries[0].target, "the highlight found its passage");
 });
 
-test("moving a document to another workspace carries its notes, renumbered if needed", () => {
-  const source = workspaceWithNotes();
-  const destination = newWorkspaceRecord("Archive");
-  destination.files = [{ id: "doc", name: "taken.md", content: "" }];
-  const plan = planTransfer(source, destination, { fileIds: ["doc"], folderIds: [] });
-  const newId = plan.renamedFileIds.get("doc")!;
-  assert.ok(newId && newId !== "doc");
-  assert.deepEqual(
-    plan.notes.map((n) => [n.id, n.fileId]),
-    [["n1", newId]],
-  );
-  assert.deepEqual(
-    applyToDestination(destination, plan).notes!.map((n) => n.id),
-    ["n1"],
-  );
-  assert.deepEqual(
-    removeFromSource(source, plan).notes!.map((n) => n.id),
-    ["n2"],
-    "notes on documents that stay are untouched",
-  );
+test("an unchanged document is read once; an edited one again", () => {
+  const first = documentEntries("cached", DOC);
+  assert.equal(documentEntries("cached", DOC), first);
+  const edited = documentEntries("cached", `${DOC}\n\n\`\`\`note\nmore\n\`\`\`\n`);
+  assert.notEqual(edited, first);
+  assert.equal(edited.length, 3);
+});
+
+test("search matches every word across text, label, document name and page", () => {
+  const entries = notebookEntries([doc("guide", DOC)]);
+  const name = (id: string) => (id === "guide" ? "Setup guide.md" : undefined);
+  const file = doc("guide", DOC);
+  const section = (e: (typeof entries)[number]) => pageOf(file, e.span.start)?.title;
+  const ids = (query: string) => searchEntries(entries, query, name, section).map((e) => e.id);
+  assert.deepEqual(ids(""), ["guide#0", "guide#1"]);
+  assert.deepEqual(ids("dist builds"), ["guide#1"]);
+  assert.deepEqual(ids("setup installer"), ["guide#0"]);
+  assert.deepEqual(ids("configure"), ["guide#1"]);
+  assert.deepEqual(ids("guide.md"), ["guide#0", "guide#1"]);
+  assert.deepEqual(ids("missing"), []);
+});
+
+test("an entry's page is the section its fence sits in", () => {
+  const file = doc("guide", DOC);
+  const [mark, note] = notebookEntries([file]);
+  assert.equal(pageOf(file, mark.target!.start)?.title, "Install");
+  assert.equal(pageOf(file, note.span.start)?.title, "Configure");
+});
+
+test("the merged notes file is every entry's Markdown, in list order", () => {
+  const entries = notebookEntries([doc("guide", DOC)]);
+  assert.equal(notesToMarkdown(entries), "installer\n\nUse **dist/** for builds.\n");
+  assert.equal(notesToMarkdown([]), "");
 });

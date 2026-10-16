@@ -7,7 +7,7 @@ import type { MarkdownEditor as Editor, MarkdownEditorHandle } from "./MarkdownE
  *
  * Most visits only read, so the editor (toolbar, attachment picker, math
  * keyboard, formatting commands) stays out of the reader's download. Opening a
- * file's menu, creating a document or choosing Edit calls
+ * file's Edit action, creating a document or choosing Edit calls
  * `preloadMarkdownEditor`, so the download usually finishes before the editor
  * is needed. Precached with the offline shell (see vite.config.ts).
  */

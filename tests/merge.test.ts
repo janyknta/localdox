@@ -99,15 +99,15 @@ test("deleted on one side and edited on the other is a conflict", () => {
   assert.equal(mergeWorkspaces(b, theirs, mine), null);
 });
 
-test("stars and highlights pointing at a file deleted by the other tab are dropped", () => {
+test("stars and panes pointing at a file deleted by the other tab are dropped", () => {
   const b = base();
   const mine = clone(b);
-  mine.highlights = [{ id: "h", fileId: "b", text: "B", color: "yellow" }];
+  mine.saved = [...b.saved!, { id: "s", fileId: "b", kind: "file", title: "B", createdAt: 0 }];
   mine.ui.panes = [{ id: "p", tabs: ["a", "b"], activeTabId: "b" }];
   const theirs = clone(b);
   theirs.files = theirs.files.filter((f) => f.id !== "b");
   const merged = mergeWorkspaces(b, mine, theirs)!;
   assert.deepEqual(merged.files.map((f) => f.id), ["a"]);
-  assert.deepEqual(merged.highlights, []);
+  assert.deepEqual(merged.saved?.map((item) => item.id), ["s1"]);
   assert.deepEqual(merged.ui.panes, [{ id: "p", tabs: ["a"], activeTabId: null }]);
 });

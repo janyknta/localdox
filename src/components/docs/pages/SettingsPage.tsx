@@ -1,4 +1,3 @@
-import { type WorkspaceKind } from "@/lib/workspace/kinds";
 import { useState, useEffect, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tabs from "@radix-ui/react-tabs";
@@ -9,6 +8,7 @@ import {
   Folder,
   GitBranch,
   Palette,
+  ListChecks,
   Sigma,
   Sparkles,
   X,
@@ -22,6 +22,7 @@ import { MathSettings } from "./settings/MathTab";
 import { WorkspaceSettings } from "./settings/WorkspaceTab";
 import { BinSettings } from "./settings/SavedTab";
 import { StorageSettings } from "./settings/StorageTab";
+import { PracticeSettingsTab } from "./settings/PracticeTab";
 import { ExamRulesSettings } from "./settings/ExamRulesTab";
 import type { RulesTemplate } from "@/services/exams/templates";
 import "./settings/settings.css";
@@ -32,16 +33,15 @@ import type { MathRendererType } from "@/services/math";
 export interface SettingsPageProps {
   showEmbedMedia: boolean;
   onSetShowEmbedMedia: (show: boolean) => void;
-  workspaces: { id: string; name: string; kind?: WorkspaceKind }[];
+  workspaces: { id: string; name: string }[];
   currentWorkspaceId: string | null;
   onRenameWorkspace: (id: string, name: string) => void;
   onDeleteWorkspace: (id: string) => void;
-  onNewWorkspace: (name: string, kind?: WorkspaceKind) => void;
+  onNewWorkspace: (name: string) => void;
   onClearStorage: () => void;
   files: MdFile[];
-  /** The open workspace's notes and rough work, for the storage total. */
+  /** The open workspace's rough work, for the storage total. */
   writing?: {
-    notes: readonly { content: string }[];
     scratchpads: readonly { title: string; content: string }[];
   };
   onOpenWorkspace: (id: string) => void;
@@ -91,12 +91,29 @@ export interface SettingsPageProps {
   initialTab?: TabId;
   /** With the exams tab: the ruleset to open for editing. */
   initialRulesId?: string;
+  initialPracticeId?: string;
+  onPracticeChange?: (id: string) => void;
+  onAddTextFile: (
+    name: string,
+    content: string,
+    folderId: string | null,
+  ) => { id: string; name: string };
+  onTabChange?: (tab: TabId) => void;
+  onRulesChange?: (id?: string) => void;
   /** Dismiss the dialog. */
   onClose: () => void;
 }
 
-type TabId =
-  "appearance" | "reading" | "diagrams" | "math" | "ai" | "workspace" | "exams" | "storage";
+export type TabId =
+  | "appearance"
+  | "reading"
+  | "diagrams"
+  | "math"
+  | "ai"
+  | "workspace"
+  | "exams"
+  | "practice"
+  | "storage";
 
 const SECTIONS = [
   {
@@ -149,6 +166,13 @@ const SECTIONS = [
     group: "Your library",
   },
   {
+    id: "practice",
+    label: "Practice",
+    description: "Question timing, focus and session controls.",
+    icon: ListChecks,
+    group: "Your library",
+  },
+  {
     id: "storage",
     label: "Storage",
     description: "Manage this device's data and offline access.",
@@ -165,11 +189,20 @@ export function SettingsPage(props: SettingsPageProps) {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const selectedTab = activeTab === "ai" && !aiEnabled ? "appearance" : activeTab;
   const sections = SECTIONS.filter((section) => section.id !== "ai" || aiEnabled);
+  const focusedRules =
+    props.initialRulesId &&
+    props.files.some((file) => file.id === props.initialRulesId && !file.deletedAt);
   const current = SECTIONS.find((section) => section.id === selectedTab)!;
 
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
   }, [initialTab]);
+  useEffect(() => {
+    if (isNarrow)
+      sidebarRef.current
+        ?.querySelector<HTMLElement>('[data-state="active"]')
+        ?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [isNarrow, selectedTab]);
 
   return (
     <Dialog.Root
@@ -194,7 +227,13 @@ export function SettingsPage(props: SettingsPageProps) {
               returnFocus.current.focus({ preventScroll: true });
               return;
             }
-            document.querySelector<HTMLElement>('button[aria-label="Settings"]')?.focus();
+            const opener =
+              selectedTab === "practice"
+                ? document.querySelector<HTMLElement>('button[aria-label="Practice settings"]')
+                : null;
+            (
+              opener ?? document.querySelector<HTMLElement>('button[aria-label="Settings"]')
+            )?.focus();
           }}
           onEscapeKeyDown={(event) => {
             // A workspace draft handles Escape locally before the modal closes.
@@ -218,7 +257,10 @@ export function SettingsPage(props: SettingsPageProps) {
           </div>
           <Tabs.Root
             value={selectedTab}
-            onValueChange={(value) => setActiveTab(value as TabId)}
+            onValueChange={(value) => {
+              if (props.onTabChange) props.onTabChange(value as TabId);
+              else setActiveTab(value as TabId);
+            }}
             orientation={isNarrow ? "horizontal" : "vertical"}
             className="flex min-h-0 flex-1 flex-col sm:flex-row"
           >
@@ -286,9 +328,11 @@ export function SettingsPage(props: SettingsPageProps) {
                 <Tabs.Content
                   key={section.id}
                   value={section.id}
-                  className="settings-panel min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-6"
+                  className={`settings-panel min-h-0 flex-1 ${section.id === "exams" && focusedRules ? "flex flex-col overflow-hidden" : "overflow-y-auto"} overscroll-contain px-4 py-5 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-6`}
                 >
-                  <div className="mx-auto max-w-[640px]">
+                  <div
+                    className={`mx-auto w-full max-w-[640px] ${section.id === "exams" && focusedRules ? "flex min-h-0 flex-1 flex-col" : ""}`}
+                  >
                     {section.id === "appearance" && <AppearanceSettings {...props} />}
                     {section.id === "reading" && <ReadingSettings {...props} />}
                     {section.id === "diagrams" && <DiagramSettings {...props} />}
@@ -313,9 +357,20 @@ export function SettingsPage(props: SettingsPageProps) {
                       <ExamRulesSettings
                         files={props.files}
                         initialRulesId={props.initialRulesId}
+                        onOpenChange={props.onRulesChange}
                         onSave={props.onSaveFile}
                         onCreate={props.onCreateRules}
                         onBin={props.onBinFile}
+                      />
+                    )}
+                    {section.id === "practice" && (
+                      <PracticeSettingsTab
+                        files={props.files}
+                        fileId={props.initialPracticeId}
+                        onSelect={props.onPracticeChange}
+                        onSaveFile={props.onSaveFile}
+                        onAddFile={props.onAddTextFile}
+                        onEditRules={props.onRulesChange}
                       />
                     )}
                     {section.id === "storage" && (
@@ -344,8 +399,8 @@ export function SettingsPage(props: SettingsPageProps) {
               <footer className="shrink-0 border-t border-hairline bg-background/80 px-5 py-3 sm:px-6">
                 <div className="mx-auto flex max-w-[640px] items-center justify-between gap-3">
                   <p className="text-xs text-muted-foreground">
-                    {selectedTab === "exams"
-                      ? "Save ruleset edits before closing"
+                    {selectedTab === "exams" || selectedTab === "practice"
+                      ? "Save settings edits before closing"
                       : "Changes apply immediately"}
                   </p>
                   <Dialog.Close className="min-h-9 rounded-lg bg-foreground px-5 text-xs font-medium text-background transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 coarse:min-h-11">

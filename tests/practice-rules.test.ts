@@ -9,6 +9,9 @@ import {
   clearPracticeProgress,
   loadPracticeAnswers,
   loadPracticeTime,
+  loadPracticeSession,
+  managePracticeSession,
+  savePracticeSession,
   practiceGeneration,
   practiceSignature,
   savePracticeAnswers,
@@ -20,6 +23,8 @@ test("practice rules have safe defaults and reject invalid deadlines and unknown
     questionTimeLimitSeconds: null,
     showElapsedTime: true,
     allowSkip: true,
+    showProgress: true,
+    pauseOnTabLeave: true,
   });
   for (const seconds of [0, -1, 1.5, 36001, "60", Infinity])
     assert.equal(
@@ -86,10 +91,37 @@ test("browser-only progress guards corrupt values, isolates files, and ignores o
     savePracticeTime(fileId, "q", "sig", 1200);
     assert.equal(loadPracticeTime(fileId, "q", "sig"), 1200);
     assert.equal(loadPracticeTime(fileId, "q", "edited"), 0);
+    savePracticeSession(fileId, {
+      signature: "paper",
+      currentId: "q",
+      phase: "paused",
+      drafts: { q: ["A", "C"] },
+    });
+    assert.equal(loadPracticeSession(fileId, "paper")?.phase, "paused");
+    managePracticeSession(fileId, "end");
+    assert.equal(loadPracticeSession(fileId, "paper")?.phase, "ended");
+    assert.deepEqual(loadPracticeSession(fileId, "paper")?.drafts.q, ["A", "C"]);
+    assert.equal(loadPracticeSession(fileId, "edited"), null);
+    data.set(
+      "localdox:practice-session:test",
+      JSON.stringify({
+        signature: "paper",
+        currentId: "q",
+        phase: "ended",
+        drafts: { valid: "2.3", invalid: [2], object: {} },
+      }),
+    );
+    assert.deepEqual(loadPracticeSession(fileId, "paper")?.drafts, { valid: "2.3" });
     const generation = practiceGeneration(fileId);
     clearPracticeProgress(fileId);
     savePracticeTime(fileId, "q", "sig", 1300, generation);
     assert.equal(loadPracticeTime(fileId, "q", "sig"), 0);
+    savePracticeSession(
+      fileId,
+      { signature: "paper", currentId: "q", phase: "running", drafts: {} },
+      generation,
+    );
+    assert.equal(loadPracticeSession(fileId, "paper"), null);
     assert.deepEqual(loadPracticeAnswers(fileId), {});
     assert.equal(loadPracticeAnswers("other").q.elapsedMs, 20);
     data.set("localdox:practice-answers:test", "{broken");

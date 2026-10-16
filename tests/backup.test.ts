@@ -35,7 +35,9 @@ function richWorkspace(): WorkspaceRecord {
     {
       id: "note",
       name: "note.md",
-      content: "# Title\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n```js\nx()\n```\n",
+      content:
+        "# Title\n\n```yellownote heading note\nTitle\n```\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\n" +
+        "```note\nPrivate reading note\n```\n\n```js\nx()\n```\n",
       addedAt: 10,
       kind: "markdown",
       folderId: "inner",
@@ -103,20 +105,6 @@ function richWorkspace(): WorkspaceRecord {
       createdAt: 21,
     },
     { id: "star-file", fileId: "binned", kind: "file", title: "old.md", createdAt: 22 },
-  ];
-  w.highlights = [
-    {
-      id: "hl",
-      fileId: "note",
-      text: "Title",
-      color: "yellow",
-      label: "heading note",
-      subtopicId: "title",
-      start: 0,
-      end: 5,
-      prefix: "",
-      suffix: " a b",
-    },
   ];
   w.bookmarks = ["note#title"];
   w.ui = {
@@ -191,6 +179,78 @@ test("version 1 and unwrapped legacy backups remain readable", () => {
 
   const unwrapped = parseWorkspaceImport(JSON.stringify(legacy.workspace));
   assert.equal(unwrapped.files[0].content, "hello");
+});
+
+test("record-level highlights and notes in old backups and share links are dropped", () => {
+  // Before highlights and notes moved into the Markdown they were arrays on
+  // the record. Those arrays are discarded, not migrated — but a backup or a
+  // link that still carries them must open, even when they would not have
+  // validated (duplicate ids, missing fields).
+  const legacy = {
+    format: "localdox-workspace",
+    version: 2,
+    workspace: {
+      id: "old",
+      name: "Old",
+      files: [{ id: "a", name: "a.md", content: "# A\n\nKey idea.\n" }],
+      highlights: [
+        { id: "h", fileId: "a", text: "Key idea", color: "yellow" },
+        { id: "h", fileId: "gone", text: 3 },
+      ],
+      notes: [
+        { id: "n", fileId: "a", fileName: "a.md", content: "My note", source: { quote: "Key" } },
+        { id: "n" },
+      ],
+      bookmarks: [],
+      ui: { activeFileId: "a", expanded: {}, sidebarCollapsed: false, scrollTop: 0 },
+    },
+  };
+  const w = parseWorkspaceImport(JSON.stringify(legacy));
+  assert.equal(w.name, "Old");
+  assert.equal(w.files[0].content, "# A\n\nKey idea.\n");
+  assert.equal("highlights" in w, false);
+  assert.equal("notes" in w, false);
+  const unwrapped = parseWorkspaceImport(JSON.stringify(legacy.workspace));
+  assert.equal("highlights" in unwrapped || "notes" in unwrapped, false);
+});
+
+test("a stored workspace row that still has highlights and notes loads without them", async () => {
+  const w = newWorkspaceRecord("Stored");
+  w.files = [{ id: "a", name: "a.md", content: "# A" }];
+  await persistence.putWorkspace(w);
+  // Add the legacy arrays to the stored row, as an older build wrote it.
+  await new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open("localdox");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction("workspaces", "readwrite");
+      const store = tx.objectStore("workspaces");
+      const row = store.get(w.id);
+      row.onsuccess = () =>
+        store.put({
+          ...row.result,
+          highlights: [{ id: "h", fileId: "a", text: "A", color: "yellow" }],
+          notes: [{ id: "n", fileId: "a", content: "old note" }],
+        });
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onabort = () => reject(tx.error);
+    };
+  });
+  const loaded = (await persistence.getWorkspace(w.id))!;
+  assert.equal("highlights" in loaded, false);
+  assert.equal("notes" in loaded, false);
+  assert.equal(loaded.files[0].content, "# A");
+  assert.ok(!(await serializeWorkspace(loaded)).includes("old note"));
+  const entries = (await persistence.getWorkspaceEntries(w.id))!;
+  assert.equal("highlights" in entries || "notes" in entries, false);
+  // The next save writes the row without them.
+  await persistence.putWorkspace(loaded);
+  assert.equal("notes" in (await persistence.getWorkspace(w.id))!, false);
+  await persistence.destroy();
 });
 
 test("unknown document kinds and fields from a newer build are tolerated", () => {
@@ -301,10 +361,23 @@ test("a default workspace share leaves out the Bin, annotations, history and lay
     ["note", "pdf", "derived"],
   );
   assert.ok(!json.includes("binned text"), "binned content must not be uploaded");
-  for (const secret of ["Compare with chapter 3", "Entry point", "heading note"])
+  for (const secret of [
+    "Compare with chapter 3",
+    "Entry point",
+    "heading note",
+    "Private reading note",
+  ])
     assert.ok(!json.includes(secret), `private note "${secret}" must not be uploaded`);
+  // Highlights and notes are fenced blocks in the Markdown; the document
+  // itself still travels intact around them.
+  const note = shared.files.find((f) => f.id === "note")!;
+  assert.doesNotMatch(note.content, /```(yellow)?note/);
+  assert.match(note.content, /^# Title\n\n\| a \| b \|/);
+  assert.match(note.content, /```js\nx\(\)\n```\n$/);
+  assert.equal(countAnnotations(shared, liveIds(shared)), 0);
+  assert.equal("highlights" in shared, false);
+  assert.equal("notes" in shared, false);
   assert.deepEqual(shared.saved, []);
-  assert.deepEqual(shared.highlights, []);
   assert.deepEqual(shared.bookmarks, []);
   assert.deepEqual(shared.ui.recentFileIds, []);
   assert.deepEqual(shared.ui.panes, []);
@@ -331,17 +404,19 @@ test("a share keeps only the folders on the path to a shared file", () => {
   assert.equal(onlyDerived.files[0].derivedFrom?.sourceName, "paper.pdf");
 });
 
-test("annotations travel only when opted in, and only for shared files", () => {
+test("annotations travel only when opted in, and only for shared files", async () => {
   const w = richWorkspace();
   // Stars are kept in the record but are no longer visible, so they are
-  // neither counted nor shared.
-  assert.equal(countAnnotations(w, liveIds(w)), 1);
+  // neither counted nor shared. The count is the fenced blocks in the
+  // selected files' Markdown: one highlight and one note.
+  assert.equal(countAnnotations(w, liveIds(w)), 2);
+  assert.equal(countAnnotations(w, ["pdf", "derived"]), 0);
   const shared = buildWorkspaceShare(w, { fileIds: liveIds(w), includeAnnotations: true });
   assert.deepEqual(shared.saved, []);
-  assert.deepEqual(
-    shared.highlights?.map((h) => h.id),
-    ["hl"],
-  );
+  assert.equal(shared.files.find((f) => f.id === "note")!.content, w.files[0].content);
+  assert.equal(countAnnotations(shared, liveIds(shared)), 2);
+  const json = await serializeWorkspace(shared);
+  assert.ok(json.includes("heading note") && json.includes("Private reading note"));
   assert.deepEqual(shared.bookmarks, []);
 
   // A binned file the sender ticks explicitly arrives live.
@@ -363,7 +438,7 @@ test("a shared workspace imports as the previewed selection", async () => {
   );
   assert.equal(await portableData(received.files[1].data), await portableData(w.files[2].data));
   assert.deepEqual(received.saved ?? [], []);
-  assert.deepEqual(received.highlights, []);
+  assert.equal("highlights" in received, false);
 
   // The file-link payload is built from the same selection.
   const files = parseSharedFiles(await serializeSharedFiles(shared.files, w.name));

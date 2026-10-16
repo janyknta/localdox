@@ -1,5 +1,14 @@
-import { useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, X } from "lucide-react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { ChevronLeft, ChevronRight, Check, Ellipsis, X } from "lucide-react";
 import { dataBlob } from "@/lib/workspace/binary";
 import { ExamAssets, ExamMarkdown } from "@/services/exams/ExamMarkdown";
 import { numeric, optionLabel, type Question, type Solution } from "@/services/exams/parser";
@@ -7,10 +16,14 @@ import { checkPractice, readPracticeFile, type PracticeSheet } from "@/services/
 import { isAnswered, type Outcome, type Response } from "@/services/exams/scoring";
 import { DEFAULT_PRACTICE_RULES, type PracticeRules } from "@/services/exams/practice-rules";
 import {
-  clearPracticeProgress,
+  PRACTICE_ACTION_EVENT,
+  type PracticeAction,
   formatPracticeTime,
   loadPracticeAnswers,
   loadPracticeTime,
+  loadPracticeSession,
+  savePracticeSession,
+  type PracticeSession,
   practiceGeneration,
   practiceSignature,
   savePracticeAnswers,
@@ -18,16 +31,8 @@ import {
   type PracticeAnswer as Answer,
   type PracticeAnswers as Answers,
 } from "@/services/exams/practice-progress";
-import {
-  isRulesFile,
-  rulesTag,
-  rulesetTitle,
-  withRulesTag,
-  withoutRulesTag,
-} from "@/services/exams/rules-tag";
+import { isRulesFile, rulesTag } from "@/services/exams/rules-tag";
 import { xruleSchema } from "@/services/exams/xrule";
-import { practiceXruleTemplate } from "@/services/exams/templates";
-import { TYPE_LABEL, TYPE_NAME } from "@/services/exams/ui/display";
 import "@/services/exams/exams.css";
 import { PracticeWorkspaceContext } from "../ExamWorkspaceContext";
 import { ViewerFrame, ViewerMasthead } from "./shared";
@@ -54,8 +59,7 @@ export function PracticeFileViewer(props: Props) {
   );
   const saved = useMemo(() => read(file.content), [read, file.content]);
   const { editing, draft, setDraft, drafted, actions } = useSourceEditor(file, read, props);
-  // Images resolve by file name from the workspace where its files are at
-  // hand (Exam Workspaces); elsewhere they show as a labelled gap.
+  // Images resolve by file name from the current workspace.
   const files = workspace?.files;
   const assets = useMemo(() => {
     const found: Record<string, Blob> = {};
@@ -77,11 +81,7 @@ export function PracticeFileViewer(props: Props) {
       action={actions}
     >
       <div className="mx-auto max-w-3xl px-4 py-6 md:px-8">
-        <ViewerMasthead
-          file={file}
-          kindLabel="Practice"
-          meta={editing || !saved.ok ? undefined : plural(saved.value.questions.length, "question")}
-        />
+        {(editing || !saved.ok) && <ViewerMasthead file={file} kindLabel="Practice" />}
         {editing ? (
           <SourceEditor
             label="Edit practice questions"
@@ -136,73 +136,36 @@ function PracticeSetup({ props, sheet }: { props: Props; sheet: PracticeSheet })
         : !rules
           ? `“${tag}” has no practice controls. Add them in Settings → Exam rules → Advanced.`
           : null);
-  const choose = (name: string) =>
-    props.onContentChange?.(
-      props.file.id,
-      name ? withRulesTag(props.file.content, name) : withoutRulesTag(props.file.content),
-    );
-  return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <label htmlFor={`practice-rules-${props.file.id}`} className="text-muted-foreground">
-          Practice rules
-        </label>
-        <select
-          id={`practice-rules-${props.file.id}`}
-          className="min-h-9 min-w-0 max-w-full rounded-md border border-border bg-background px-2 text-sm"
-          value={tag ?? ""}
-          disabled={!props.onContentChange}
-          onChange={(e) => choose(e.target.value)}
-        >
-          <option value="">Default · no time limit</option>
-          {tag && !selected && <option value={tag}>{tag} (missing)</option>}
-          {rulesets.map((f) => (
-            <option key={f.id} value={f.name}>
-              {rulesetTitle(f)}
-            </option>
-          ))}
-        </select>
-        {selected && (
-          <button
-            type="button"
-            className="rounded px-2 py-2 hover:bg-accent"
-            onClick={() => workspace?.openRules(selected.id)}
-          >
-            Edit rules
-          </button>
-        )}
-        {workspace && props.onContentChange && (
-          <button
-            type="button"
-            className="rounded px-2 py-2 hover:bg-accent"
-            onClick={() => {
-              const made = workspace.addTextFile(
-                "Practice.xrule",
-                practiceXruleTemplate("Practice"),
-                null,
-              );
-              choose(made.name);
-              workspace.openRules(made.id);
-            }}
-          >
-            New practice rules
-          </button>
-        )}
-      </div>
-      {problem ? (
-        <p role="alert" className="text-sm text-destructive">
-          {problem}
-        </p>
-      ) : (
-        <Sheet
-          key={`${props.file.id}:${sheet.questions.map((q) => `${q.id}:${practiceSignature(q, sheet.solutionFor[q.id])}`).join(",")}:${JSON.stringify(rules)}`}
-          fileId={props.file.id}
-          sheet={sheet}
-          rules={rules ?? DEFAULT_PRACTICE_RULES}
-          paused={workspace?.paused ?? false}
-        />
-      )}
+  const openSettings = () => workspace?.openPractice(props.file.id);
+  const settingsButton = (
+    <button
+      type="button"
+      aria-label="Practice settings"
+      title="Practice settings"
+      aria-haspopup="dialog"
+      onClick={openSettings}
+      disabled={!workspace}
+      className="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-30"
+    >
+      <Ellipsis size={18} aria-hidden />
+    </button>
+  );
+  return problem ? (
+    <div className="space-y-4">
+      <div className="flex justify-end">{settingsButton}</div>
+      <p role="alert" className="text-sm text-destructive">
+        {problem}
+      </p>
     </div>
+  ) : (
+    <Sheet
+      key={`${props.file.id}:${sheet.questions.map((q) => `${q.id}:${practiceSignature(q, sheet.solutionFor[q.id])}`).join(",")}`}
+      fileId={props.file.id}
+      sheet={sheet}
+      rules={rules ?? DEFAULT_PRACTICE_RULES}
+      paused={workspace?.paused ?? false}
+      settingsButton={settingsButton}
+    />
   );
 }
 
@@ -211,7 +174,9 @@ function Sheet({
   sheet,
   rules,
   paused,
+  settingsButton,
 }: {
+  settingsButton: ReactNode;
   fileId: string;
   sheet: PracticeSheet;
   rules: PracticeRules;
@@ -232,28 +197,79 @@ function Sheet({
       ) as Answers,
     [stored, signatures],
   );
-  const firstOpen = sheet.questions.findIndex((q) => !answers[q.id]);
-  const [index, setIndex] = useState(() =>
-    firstOpen < 0 ? sheet.questions.length - 1 : firstOpen,
-  );
+  const signature = Object.entries(signatures)
+    .map(([id, sig]) => `${id}:${sig}`)
+    .join(",");
+  const [session, setSession] = useState<PracticeSession>(() => {
+    const restored = loadPracticeSession(fileId, signature);
+    const firstOpen = sheet.questions.find((q) => !answers[q.id]) ?? sheet.questions.at(-1)!;
+    return restored && sheet.questions.some((q) => q.id === restored.currentId)
+      ? {
+          ...restored,
+          phase: restored.phase === "ended" ? "ended" : document.hidden ? "paused" : "running",
+        }
+      : { signature, currentId: firstOpen.id, phase: "running", drafts: {} };
+  });
+  const index = sheet.questions.findIndex((q) => q.id === session.currentId);
   const [restart, setRestart] = useState(0);
   const [notice, setNotice] = useState("");
-  const focusRef = useRef<HTMLHeadingElement>(null);
+  const focusRef = useRef<HTMLDivElement>(null);
   const initial = useRef(true);
+  const pausedView = useRef(paused);
+  pausedView.current = paused;
+  const generation = practiceGeneration(fileId);
+  useEffect(() => {
+    savePracticeSession(fileId, session, generation);
+  }, [fileId, session, generation]);
+  // Pause on both tab visibility and window focus; coming back resumes without a button.
+  useEffect(() => {
+    const pause = () => setSession((s) => (s.phase === "running" ? { ...s, phase: "paused" } : s));
+    const resume = () => {
+      if (!document.hidden)
+        setSession((s) => (s.phase === "paused" ? { ...s, phase: "running" } : s));
+    };
+    const visibility = () => {
+      if (document.hidden) pause();
+      else if (document.hasFocus()) resume();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    window.addEventListener("blur", pause);
+    window.addEventListener("focus", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      window.removeEventListener("blur", pause);
+      window.removeEventListener("focus", resume);
+    };
+  }, []);
+  useEffect(() => {
+    const change = (event: Event) => {
+      const action = (event as CustomEvent<PracticeAction>).detail;
+      if (action.fileId !== fileId) return;
+      setNotice("");
+      if (action.action === "reset") {
+        setStored({});
+        setSession({ signature, currentId: sheet.questions[0].id, phase: "running", drafts: {} });
+        setRestart((n) => n + 1);
+      } else setSession((s) => ({ ...s, phase: "ended" }));
+    };
+    window.addEventListener(PRACTICE_ACTION_EVENT, change);
+    return () => window.removeEventListener(PRACTICE_ACTION_EVENT, change);
+  }, [fileId, signature, sheet]);
   useEffect(() => {
     if (initial.current) {
       initial.current = false;
       return;
     }
-    focusRef.current?.focus();
+    if (!pausedView.current) focusRef.current?.focus({ preventScroll: true });
   }, [index, restart]);
   const commit = (next: Answers) => {
     setStored(next);
     savePracticeAnswers(fileId, next);
   };
   const q = sheet.questions[index];
+  const stopped = paused || session.phase !== "running";
   const answer = (response: Response, elapsedMs: number, reason: Answer["reason"] = "answered") => {
-    if (answers[q.id] || (reason === "answered" && !isAnswered(response))) return;
+    if (stopped || answers[q.id] || (reason === "answered" && !isAnswered(response))) return;
     const outcome =
       reason === "answered" ? checkPractice(q, sheet.solutionFor[q.id], response) : "unanswered";
     commit({ ...answers, [q.id]: { response, outcome, elapsedMs, reason, sig: signatures[q.id] } });
@@ -261,108 +277,128 @@ function Sheet({
       setNotice(
         `Time is up for question ${index + 1}. Its answer is available with Previous question.`,
       );
-      if (index + 1 < sheet.questions.length) setIndex(index + 1);
+      if (index + 1 < sheet.questions.length)
+        setSession((s) => ({ ...s, currentId: sheet.questions[index + 1].id }));
     }
   };
   const completed = Object.keys(answers).length;
-  const correct = Object.values(answers).filter((a) => a.outcome === "correct").length;
-  const group = sheet.groups.find((g) => g.questions.some((item) => item.id === q.id));
+  const move = (delta: number) => {
+    const next = sheet.questions[index + delta];
+    if (!next || stopped) return;
+    setSession((s) => ({ ...s, currentId: next.id }));
+    setNotice("");
+  };
+  const roundButton =
+    "inline-flex size-11 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-30";
   return (
-    <div className="ex-portal xf-preview flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div
-          className="h-1.5 min-w-24 flex-1 overflow-hidden rounded-full bg-muted"
-          role="progressbar"
-          aria-label="Practice answered"
-          aria-valuemin={0}
-          aria-valuemax={sheet.questions.length}
-          aria-valuenow={completed}
-        >
-          <div
-            className="h-full bg-lime-600 transition-[width] dark:bg-lime-500"
-            style={{ width: `${(completed / sheet.questions.length) * 100}%` }}
-          />
+    <div className="ex-portal xf-preview flex flex-col gap-5">
+      {session.phase === "ended" ? (
+        <div>
+          <div className="flex justify-end">{settingsButton}</div>
+          <div className="space-y-4 py-10 text-center">
+            <h2 className="text-base font-medium">Practice ended</h2>
+            <p className="text-sm text-muted-foreground">
+              {completed} of {sheet.questions.length} answered. Your progress is saved.
+            </p>
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                className="rounded-full bg-foreground px-4 py-2 text-sm text-background"
+                onClick={() => setSession((s) => ({ ...s, phase: "running" }))}
+              >
+                Continue practice
+              </button>
+            </div>
+          </div>
         </div>
-        <p className="text-sm tabular-nums text-muted-foreground" aria-live="polite">
-          {completed} of {sheet.questions.length} answered{completed > 0 && ` · ${correct} correct`}
-        </p>
-        {(completed > 0 || index > 0) && (
-          <button
-            type="button"
-            className="text-xs underline underline-offset-4"
-            onClick={() => {
-              if (!window.confirm("Clear practice answers and solve times, and start over?"))
-                return;
-              clearPracticeProgress(fileId);
-              setStored({});
-              setIndex(0);
-              setNotice("");
-              setRestart((n) => n + 1);
-            }}
+      ) : (
+        <>
+          <div
+            ref={focusRef}
+            tabIndex={-1}
+            className="outline-none"
+            aria-label={`Question ${index + 1} of ${sheet.questions.length}`}
           >
-            Start over
-          </button>
-        )}
-      </div>
-      {notice && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {notice}
-        </p>
-      )}
-      <h2 ref={focusRef} tabIndex={-1} className="text-sm font-semibold outline-none">
-        {group?.title ?? "Practice"}
-      </h2>
-      <p className="text-xs text-muted-foreground">
-        Question {index + 1} of {sheet.questions.length}
-      </p>
-      <TimedQuestion
-        key={`${q.id}:${restart}`}
-        fileId={fileId}
-        sig={signatures[q.id]}
-        number={index + 1}
-        question={q}
-        solution={sheet.solutionFor[q.id]}
-        answer={answers[q.id]}
-        onAnswer={answer}
-        rules={rules}
-        paused={paused}
-      />
-      <nav aria-label="Practice questions" className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-40"
-          disabled={index === 0}
-          onClick={() => {
-            setIndex(index - 1);
-            setNotice("");
-          }}
-        >
-          Previous question
-        </button>
-        {index < sheet.questions.length - 1 ? (
-          <button
-            type="button"
-            className="rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-40"
-            disabled={!answers[q.id]}
-            onClick={() => {
-              setIndex(index + 1);
-              setNotice("");
-            }}
-          >
-            Next question
-          </button>
-        ) : (
-          completed === sheet.questions.length && (
-            <p role="status" className="text-sm font-medium">
+            <TimedQuestion
+              key={`${q.id}:${restart}`}
+              fileId={fileId}
+              sig={signatures[q.id]}
+              number={index + 1}
+              question={q}
+              solution={sheet.solutionFor[q.id]}
+              answer={answers[q.id]}
+              onAnswer={answer}
+              rules={rules}
+              paused={stopped}
+              controls={
+                <>
+                  <nav aria-label="Practice questions" className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label="Previous question"
+                      title="Previous question"
+                      className={roundButton}
+                      disabled={index === 0 || stopped}
+                      onClick={() => move(-1)}
+                    >
+                      <ChevronLeft size={18} aria-hidden />
+                    </button>
+                    <span
+                      className="min-w-12 text-center text-xs tabular-nums text-muted-foreground"
+                      aria-hidden
+                    >
+                      {index + 1} / {sheet.questions.length}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Next question"
+                      title="Next question"
+                      className={roundButton}
+                      disabled={index === sheet.questions.length - 1 || stopped}
+                      onClick={() => move(1)}
+                    >
+                      <ChevronRight size={18} aria-hidden />
+                    </button>
+                  </nav>
+                </>
+              }
+              settingsButton={settingsButton}
+              progress={
+                rules.showProgress ? (
+                  <div
+                    className="h-0.5 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-label="Practice answered"
+                    aria-valuemin={0}
+                    aria-valuemax={sheet.questions.length}
+                    aria-valuenow={completed}
+                    aria-valuetext={`${completed} of ${sheet.questions.length} answered`}
+                  >
+                    <div
+                      className="h-full bg-muted-foreground/35"
+                      style={{ width: `${(completed / sheet.questions.length) * 100}%` }}
+                    />
+                  </div>
+                ) : null
+              }
+              draft={session.drafts[q.id] ?? null}
+              onDraftChange={(draft) =>
+                setSession((s) => ({ ...s, drafts: { ...s.drafts, [q.id]: draft } }))
+              }
+            />
+          </div>
+          {completed === sheet.questions.length && (
+            <p role="status" className="text-center text-xs text-muted-foreground">
               Practice complete
             </p>
-          )
-        )}
-      </nav>
-      <p className="text-xs text-muted-foreground">
-        Solve times are kept only in this browser. Skipped and timed-out questions count as
-        completed.
-      </p>
+          )}
+          {notice && (
+            <p role="status" className="text-xs text-muted-foreground">
+              {notice}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -373,8 +409,14 @@ function TimedQuestion({
   rules,
   paused,
   onAnswer,
+  controls,
+  settingsButton,
+  progress,
   ...props
 }: {
+  settingsButton: ReactNode;
+  controls: ReactNode;
+  progress: ReactNode;
   fileId: string;
   sig: string;
   rules: PracticeRules;
@@ -383,6 +425,8 @@ function TimedQuestion({
   question: Question;
   solution: Solution;
   answer?: Answer;
+  draft: Response;
+  onDraftChange: (response: Response) => void;
   onAnswer: (response: Response, elapsedMs: number, reason?: Answer["reason"]) => void;
 }) {
   const [elapsed, setElapsed] = useState(
@@ -436,37 +480,48 @@ function TimedQuestion({
     if (limit !== null && ms >= limit) callback.current(null, limit, "timeout");
     else callback.current(response, ms, reason);
   };
+  const displayed = props.answer?.elapsedMs ?? elapsed;
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums text-muted-foreground">
-        {rules.showElapsedTime && (
-          <span>
-            {props.answer ? "Solve time" : "Elapsed"}:{" "}
-            {props.answer && props.answer.elapsedMs === undefined
-              ? "Not recorded"
-              : formatPracticeTime(props.answer?.elapsedMs ?? elapsed)}
-          </span>
-        )}
-        {!props.answer && limit !== null && (
-          <span role="timer" aria-label="Time remaining">
-            Remaining: {formatPracticeTime(Math.ceil(Math.max(0, limit - elapsed) / 1000) * 1000)}
-            {paused ? " · Paused" : ""}
-          </span>
-        )}
-        {!props.answer && rules.allowSkip && (
-          <button
-            type="button"
-            disabled={paused}
-            className="rounded px-2 py-1 underline underline-offset-4"
-            onClick={() => complete(null, "skipped")}
-          >
-            Skip and reveal answer
-          </button>
-        )}
+    <div className="space-y-5">
+      <div className="space-y-3">
+        <div
+          className="flex items-center gap-2 sm:gap-3"
+          role="group"
+          aria-label="Practice controls"
+        >
+          {controls}
+          <span className="flex-1" />
+          {(rules.showElapsedTime || limit !== null) && (
+            <span
+              role="timer"
+              aria-label={
+                props.answer ? "Solve time" : limit !== null ? "Time remaining" : "Question time"
+              }
+              title={
+                props.answer ? "Solve time" : limit !== null ? "Time remaining" : "Question time"
+              }
+              className="shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+            >
+              {formatPracticeTime(
+                !props.answer && limit !== null
+                  ? Math.ceil(Math.max(0, limit - elapsed) / 1000) * 1000
+                  : displayed,
+              )}
+            </span>
+          )}
+          {settingsButton}
+        </div>
+        {progress}
       </div>
-      <ol>
-        <PracticeQuestion {...props} onAnswer={(response) => complete(response)} />
-      </ol>
+      {paused ? (
+        <div role="status" className="py-14 text-center text-sm text-muted-foreground">
+          Practice paused
+        </div>
+      ) : (
+        <ol className="list-none">
+          <PracticeQuestion {...props} onAnswer={(response) => complete(response)} />
+        </ol>
+      )}
     </div>
   );
 }
@@ -484,15 +539,18 @@ function PracticeQuestion({
   solution,
   answer,
   onAnswer,
+  draft,
+  onDraftChange,
 }: {
   number: number;
   question: Question;
   solution: Solution;
   answer?: Answer;
   onAnswer: (response: Response) => void;
+  draft: Response;
+  onDraftChange: (response: Response) => void;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState<Response>(null);
   const verdictRef = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);
   // Checking with a button that then disappears would drop focus to the page;
@@ -512,18 +570,10 @@ function PracticeQuestion({
   const ready = q.type === "nat" ? typeof draft === "string" && numeric(draft) : isAnswered(draft);
 
   return (
-    <li
-      aria-labelledby={`${id}-title`}
-      className="rounded-xl border border-hairline bg-card px-4 py-4 md:px-5"
-    >
-      <p className="mb-2 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-        <span id={`${id}-title`} className="font-semibold text-foreground">
-          <span className="sr-only">Question </span>Q{number}
-        </span>
-        <span title={TYPE_NAME[q.type]}>· {TYPE_LABEL[q.type]}</span>
-        {q.difficulty && <span>· {q.difficulty}</span>}
-        {q.topic && <span>· {q.topic}</span>}
-      </p>
+    <li aria-labelledby={`${id}-title`} className="list-none">
+      <span id={`${id}-title`} className="sr-only">
+        Question Q{number}
+      </span>
       <ExamMarkdown source={q.body} />
 
       {q.type === "nat" ? (
@@ -542,7 +592,7 @@ function PracticeQuestion({
               autoComplete="off"
               placeholder="Enter a number"
               value={typeof draft === "string" ? draft : ""}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => onDraftChange(e.target.value)}
             />
             <CheckButton disabled={!ready} />
           </form>
@@ -577,7 +627,8 @@ function PracticeQuestion({
                     onClick={() => {
                       if (answer) return;
                       if (q.type === "mcq") check(label);
-                      else setDraft(on ? picked.filter((v) => v !== label) : [...picked, label]);
+                      else
+                        onDraftChange(on ? picked.filter((v) => v !== label) : [...picked, label]);
                     }}
                     className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full xf-choice text-xs font-semibold after:absolute after:inset-0 after:rounded-lg after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-ring ${answer ? "cursor-default" : "cursor-pointer"} ${BADGE_TONE[state]}`}
                   >

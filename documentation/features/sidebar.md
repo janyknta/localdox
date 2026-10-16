@@ -68,6 +68,16 @@ document you are reading.
 are the count. When it is closed, the number is the only hint of what is
 inside.
 
+**Folders open one level at a time.** Folders start closed. Opening a folder
+reveals its immediate files and subfolders; each subfolder opens separately.
+The sidebar remembers individually opened folders for the session, including
+when their parent is closed and reopened.
+
+**The empty explorer area is a root drop target.** Drag a file or folder out
+of its parent and drop it below the tree or in the explorer's outer padding
+to move it to the workspace root. The root destination highlights for both
+files and folders; dropping on a folder still moves the item inside it.
+
 **Status sits with what it describes.** The save state is a fact about the
 workspace ("everything here is stored on this device"), so it sits next to the
 workspace name in the footer and at the bottom of the rail. In the rail it used

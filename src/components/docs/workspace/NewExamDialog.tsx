@@ -9,6 +9,7 @@
 import { useEffect, useId, useState } from "react";
 import { FileQuestion } from "lucide-react";
 import { Modal } from "@/components/ui/modal";
+import { Dropdown } from "@/components/ui/dropdown";
 import { xruleTemplate } from "@/services/exams/templates";
 
 /** "" in the select: make a new ruleset with the default rules. */
@@ -111,19 +112,19 @@ export function NewExamDialog({
         </label>
         <label className="block space-y-1.5">
           <span className={label}>Rules</span>
-          <select
+          <Dropdown
             value={rules}
-            onChange={(e) => setRules(e.target.value)}
+            onValueChange={setRules}
             aria-label="Ruleset"
-            className={control}
-          >
-            {rulesets.map((r) => (
-              <option key={r.name} value={r.name}>
-                {r.title === r.name.replace(/\.xrule$/i, "") ? r.name : `${r.title} (${r.name})`}
-              </option>
-            ))}
-            <option value={NEW_RULESET}>New ruleset (default rules)</option>
-          </select>
+            options={[
+              ...rulesets.map((r) => ({
+                value: r.name,
+                label:
+                  r.title === r.name.replace(/\.xrule$/i, "") ? r.name : `${r.title} (${r.name})`,
+              })),
+              { value: NEW_RULESET, label: "New ruleset (default rules)" },
+            ]}
+          />
           <span className="block text-xs leading-relaxed text-muted-foreground">
             {rules === NEW_RULESET
               ? `${STARTER.durationMinutes} minutes, ${STARTER.passPercentage}% to pass, ${STARTER.maxAttempts} attempts. Change them any time in Settings ▸ Exam rules.`

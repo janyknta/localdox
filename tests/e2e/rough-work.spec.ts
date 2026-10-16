@@ -1,5 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { writeFileSync } from "node:fs";
+import { confirmMoveToBin } from "./sidebar-menu";
 
 // Rough work end to end: a scratchpad in the Notes panel that is saved,
 // linked to a document, survives a reload and a crash, is cleared only after
@@ -39,9 +40,8 @@ async function openGuide(page: Page, body = GUIDE, name = "guide.md") {
 }
 
 interface Stored {
-  files: Array<{ name: string; content: string }>;
+  files: Array<{ name: string; content: string; deletedAt?: number | null }>;
   scratchpads: Array<{ id: string; title: string; content: string; fileId: string | null }>;
-  notes: Array<{ content: string; origin?: { scratchpadId: string } }>;
 }
 
 /** What IndexedDB holds for the (only) workspace right now. */
@@ -62,7 +62,6 @@ function stored(page: Page) {
             resolve({
               files: files.result,
               scratchpads: ws.scratchpads ?? [],
-              notes: ws.notes ?? [],
             });
           };
         };
@@ -244,7 +243,7 @@ test("insertion waits while the document is open in its editor", async ({ page }
   await expect(dialog.getByRole("button", { name: "Insert" })).toBeDisabled();
 });
 
-test("saving work as a note keeps a copy that links back to its scratchpad", async ({ page }) => {
+test("saving work as a note writes a copy into the pad's document", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openGuide(page);
   await openRoughWork(page);
@@ -256,20 +255,59 @@ test("saving work as a note keeps a copy that links back to its scratchpad", asy
     el.setSelectionRange(start, el.value.length);
   });
   await panel(page).getByRole("button", { name: "Save selection as note" }).click();
+  await expect(page.getByText("Added to the end of guide.md")).toBeVisible();
   await page.getByRole("button", { name: "Show notes" }).click();
   const card = panel(page).getByRole("listitem").first();
   await expect(card.locator(".katex")).toHaveCount(1);
+  // The pad is linked to guide.md, so the note is a ```note fence at its end.
+  const withNote = `${GUIDE.trimEnd()}\n\n\`\`\`note\nSo $x = 3$ works.\n\`\`\`\n`;
   await expect
-    .poll(async () => (await stored(page)).notes.map((n) => n.content))
-    .toEqual(["So $x = 3$ works."]);
+    .poll(async () => (await stored(page)).files.find((f) => f.name === "guide.md")?.content)
+    .toBe(withNote);
+  // A copy: the pad keeps everything.
+  expect((await stored(page)).scratchpads.map((pad) => pad.content)).toEqual([WORK]);
 
-  // The note's link opens the pad it came from.
-  await card.getByRole("button", { name: "Rough work › Scratchpad" }).click();
-  await expect(page.getByRole("tab", { name: "Rough work" })).toHaveAttribute(
+  // Clicking the note opens it in its document, drawn as a note card.
+  await expect(card).not.toContainText("Rough work › Scratchpad");
+  await card.locator(".docs-note").click();
+  await expect(page.getByRole("heading", { name: "Measurements", level: 1 })).toBeVisible();
+  const note = page.locator("article").getByRole("note", { name: "Note", exact: true });
+  await expect(note).toBeInViewport();
+  await expect(note.locator(".katex")).toHaveCount(1);
+});
+
+test("a pad whose document is gone saves its note into Notes.md", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openGuide(page);
+  await openRoughWork(page);
+  await panel(page).getByRole("button", { name: "New scratchpad" }).click();
+  await field(page).fill(WORK);
+  await expect.poll(async () => (await stored(page)).scratchpads[0]?.fileId ?? null).not.toBeNull();
+  // Bin the pad's document.
+  await page.getByRole("button", { name: "Options", exact: true }).first().click();
+  await page.getByText("Move to Bin", { exact: true }).click();
+  await confirmMoveToBin(page);
+  await expect
+    .poll(async () => (await stored(page)).files.find((f) => f.name === "guide.md")?.deletedAt)
+    .toBeTruthy();
+
+  // The panel stays open on the pad with no document on screen.
+  await expect(panel(page).getByRole("tab", { name: "Rough work" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
-  await expect(field(page)).toHaveValue(WORK);
+  await field(page).evaluate((el: HTMLTextAreaElement) => {
+    const start = el.value.indexOf("So ");
+    el.focus();
+    el.setSelectionRange(start, el.value.length);
+  });
+  await panel(page).getByRole("button", { name: "Save selection as note" }).click();
+  await expect(page.getByText("Added to the end of Notes.md")).toBeVisible();
+  await expect
+    .poll(async () => (await stored(page)).files.find((f) => f.name === "Notes.md")?.content)
+    .toBe("```note\nSo $x = 3$ works.\n```\n");
+  // The binned document is untouched.
+  expect((await stored(page)).files.find((f) => f.name === "guide.md")?.content).toBe(GUIDE);
 });
 
 /** Type into the pad, then kill the renderer before the autosave can land. */

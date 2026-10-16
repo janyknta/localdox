@@ -1,8 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { DocsApp } from "@/components/docs/DocsApp";
 import { THEME_COLOR_DARK, THEME_COLOR_LIGHT } from "@/lib/theme-color";
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/_app/")({
   head: () => ({
     meta: [
       { title: "Localdox - AI Docs reader" },
@@ -22,5 +21,5 @@ export const Route = createFileRoute("/")({
       { name: "twitter:image", content: "https://localdox.web.app/og-image.jpg" },
     ],
   }),
-  component: DocsApp,
+  component: () => null,
 });

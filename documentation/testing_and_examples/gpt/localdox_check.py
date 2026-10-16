@@ -494,7 +494,7 @@ TEXT_TYPES = {".xam", ".xrule", ".xp", ".md", ".mmd", ".txt", ".csv", ".json"}
 
 
 def build_workspace(root, out, name):
-    """Pack the files under `root` (folders kept) into a Localdox Exam Workspace backup.
+    """Pack the files under `root` (folders kept) into a Localdox workspace backup.
 
     Import it with Settings > Workspace > Transfer > Import workspace. .xrule files are
     placed at the workspace root, where Settings > Exam rules lists them.
@@ -537,7 +537,7 @@ def build_workspace(root, out, name):
         print("\n".join(errors))
         return errors
     backup = {"format": "localdox-workspace", "version": 2,
-              "workspace": {"kind": "exam", "name": name, "folders": folders, "files": files}}
+              "workspace": {"name": name, "folders": folders, "files": files}}
     Path(out).write_text(json.dumps(backup, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"OK: wrote {out}: {len(files)} file(s) in {len(folders)} folder(s)")
     return []

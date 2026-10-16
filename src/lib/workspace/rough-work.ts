@@ -13,12 +13,13 @@
 //    a document, and an insertion is an ordinary edit of the document, made
 //    once, with no live link back.
 //
-// Pads live on the workspace record (`WorkspaceRecord.scratchpads`), beside
-// notes, and travel the same paths: autosave, two-tab merge, backup, and
-// moving a document to another workspace. Never share links.
+// Pads live on the workspace record (`WorkspaceRecord.scratchpads`) and travel
+// its paths: autosave, two-tab merge, backup, and moving a document to another
+// workspace. Never share links. (Notes are not on the record: they are kept in
+// the documents themselves, see lib/markdown/annotations.ts.)
 
 import { fileSubtopics, headingChunkMap, type MdChunk } from "../markdown/markdown-utils.ts";
-import { chunkRanges, newNoteId, type Note } from "./notes.ts";
+import { chunkRanges } from "./notes.ts";
 
 export interface Scratchpad {
   id: string;
@@ -38,7 +39,10 @@ export const MAX_SCRATCHPAD_CHARS = 200_000;
 export const MAX_SCRATCHPAD_TITLE = 120;
 const DEFAULT_TITLE = "Scratchpad";
 
-export const newScratchpadId = newNoteId;
+export const newScratchpadId = () =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `nt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /** `base`, or `base 2`, `base 3`… — the first not already taken. */
 export function uniqueTitle(base: string, taken: Iterable<string>): string {
@@ -144,24 +148,6 @@ export function selectedWork(
     .replace(/^\s*\n/, "")
     .trimEnd();
   return markdown.trim() ? { markdown, whole } : null;
-}
-
-/**
- * A durable note made from rough work. Its link back is the pad, not a
- * passage in a document; `fileId` carries the pad's document association (or
- * "" for none) so the note travels with that document like any other.
- */
-export function noteFromScratchpad(pad: Scratchpad, markdown: string, now = Date.now()): Note {
-  return {
-    id: newNoteId(),
-    fileId: pad.fileId ?? "",
-    fileName: pad.fileName ?? "",
-    content: markdown,
-    source: { quote: "" },
-    origin: { kind: "rough-work", scratchpadId: pad.id, title: pad.title },
-    createdAt: now,
-    updatedAt: now,
-  };
 }
 
 // ---- inserting into a document -------------------------------------------------

@@ -20,6 +20,9 @@ import { createPortal } from "react-dom";
 import { ProgressiveMarkdown } from "./markdown-viewer/ProgressiveMarkdown";
 import { markdownComponents } from "./markdown-viewer/markdown-components";
 import { useSectionFolds } from "./markdown-viewer/section-folds";
+import { MarkdownViewModes, type MarkdownViewMode } from "./markdown-viewer/MarkdownViewModes";
+import { MarkdownOutline } from "./markdown-viewer/MarkdownOutline";
+import { NoteConnections } from "./markdown-viewer/NoteConnections";
 import { MathProvider } from "@/services/math/MathContext";
 import { DEFAULT_MATH_PREFERENCES } from "@/services/math/types";
 import { slugLabel } from "@/services/math/equation-registry";
@@ -56,16 +59,27 @@ import { MarkdownEditor, type MarkdownEditorHandle } from "../editor/MarkdownEdi
 import { isVideoUrl, VideoPlayer } from "@/lib/markdown/media-embeds";
 import { Lightbox } from "./Lightbox";
 import { cn } from "@/lib/utils";
-import { HL_COLORS, hlGroup, type Highlight } from "@/lib/markdown/dom-highlighter";
+import { hlGroup } from "@/lib/markdown/dom-highlighter";
+import {
+  addHighlight,
+  addNote,
+  ANNOTATION_COLORS,
+  changeAnnotation,
+  colorHex,
+  findAnnotation,
+  parseAnnotations,
+  removeAnnotation,
+  type Annotation,
+  type AnnotationColor,
+  type AnnotationEvent,
+} from "@/lib/markdown/annotations";
 import {
   getSelectionOffsets,
   buildRange,
   offsetFromPoint,
   firstTextRange,
   releaseTextIndex,
-  contextAround,
   findAnchor,
-  sameQuote,
   textBetween,
   queryRanges,
   nthQueryRange,
@@ -76,15 +90,9 @@ import { occurrenceOrdinal, parseRows } from "@/lib/search/rows";
 import type { PendingSearch } from "@/lib/search/schema";
 import { createHighlightPainter } from "@/lib/markdown/highlight-registry";
 import type { PassageTarget } from "@/lib/workspace/saved-items";
-import type { NoteDraft } from "@/lib/workspace/notes";
 import { locateInSource, sourceLinesForSelection } from "@/lib/markdown/source-locate";
 import { selectionToMarkdown } from "@/lib/markdown/selection-markdown";
-import {
-  anchorSpan,
-  lineSpan,
-  searchHitSpan,
-  type SourceSpan,
-} from "@/lib/markdown/source-address";
+import { lineSpan, searchHitSpan, type SourceSpan } from "@/lib/markdown/source-address";
 import { addressOfRange, queryRangeWithin, rangeOfAddress } from "@/lib/markdown/dom-address";
 import type { SourceAddressing } from "./markdown-viewer/ProgressiveMarkdown";
 import { diagramSourceOf } from "@/lib/markdown/diagram-sources";
@@ -149,15 +157,6 @@ interface Props {
   startInEditFileId?: string | null;
   onStartInEditConsumed?: () => void;
   nextReadingMin: number | null;
-  highlights: Highlight[];
-  onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">) => void;
-  onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
-  onRemoveHighlight: (id: string) => void;
-  /**
-   * Corrected anchors, found while painting: the document was edited and these
-   * highlights had to be re-located. Persisted, but not as an undoable step.
-   */
-  onRepairHighlights?: (patches: Array<{ id: string; patch: Partial<Highlight> }>) => void;
   /**
    * A passage the reader just opened from a note's source link: scroll to it
    * and flash it once, then call `onSavedShown` so it isn't replayed on
@@ -204,7 +203,12 @@ interface Props {
   /** Open the Ask AI panel prefilled from the current selection. */
   onAskAi?: (prefill: { selection: string; actionId?: string }) => void;
   /** Keep the selection as a note. Hidden from the selection menu when omitted. */
-  onCopyToNotes?: (draft: NoteDraft) => void;
+  /**
+   * A highlight or note was just written into this document's Markdown
+   * (lib/markdown/annotations.ts), so the app can say so and the Notes panel
+   * can mark it.
+   */
+  onAnnotated?: (event: AnnotationEvent) => void;
   /** Show or hide the Notes panel; the header button is hidden when omitted. */
   onToggleNotes?: () => void;
   notesOpen?: boolean;
@@ -244,11 +248,6 @@ function MarkdownViewerImpl({
   startInEditFileId,
   onStartInEditConsumed,
   nextReadingMin,
-  highlights,
-  onAddHighlight,
-  onUpdateHighlight,
-  onRemoveHighlight,
-  onRepairHighlights,
   pendingSaved,
   onSavedShown,
   pendingSearch,
@@ -270,11 +269,19 @@ function MarkdownViewerImpl({
   onToggleReadingMode,
   contentWidth = 50,
   onAskAi,
-  onCopyToNotes,
+  onAnnotated,
   onToggleNotes,
   notesOpen = false,
 }: Props) {
-  const singleMode = readingMode === "single";
+  const [view, setView] = useState<{ fileId: string; mode: MarkdownViewMode }>(() => ({
+    fileId: file.id,
+    mode: "preview",
+  }));
+  const viewMode = view.fileId === file.id ? view.mode : "preview";
+  const wrapAll = viewMode === "wrapped";
+  // Wrapped mode is a view of every section in this file, even when ordinary
+  // preview reads one page at a time. The reader's preference stays intact.
+  const singleMode = readingMode === "single" || wrapAll;
   const containerRef = useRef<HTMLDivElement>(null);
   const [editMode, setEditMode] = useState(false);
   // The draft text itself lives inside <MarkdownEditor>. Only the source the
@@ -321,8 +328,8 @@ function MarkdownViewerImpl({
     [file, singleMode, onNav],
   );
   const cancelEdit = useCallback(
-    (cursorIndex?: number) => {
-      onContentChange(file.id, originalContentRef.current);
+    (cursorIndex?: number, content?: string) => {
+      onContentChange(file.id, content ?? originalContentRef.current);
       setEditMode(false);
       if (cursorIndex !== undefined) {
         const chunks = fileSubtopics(file);
@@ -393,11 +400,6 @@ function MarkdownViewerImpl({
       allChunks[0] || { id: "preamble", title: stripExt(file.name), content: file.content }
     );
   }, [allChunks, activeSubtopicId, chunkForHeading, file.content, file.name]);
-
-  // Section ids are slugged from headings, so editing a heading renames them.
-  // Highlights pointing at an id that no longer exists aren't lost — they're
-  // re-anchored by text and re-homed to whichever page now holds that text.
-  const knownChunkIds = useMemo(() => new Set(allChunks.map((c) => c.id)), [allChunks]);
 
   const chunkIndex = allChunks.findIndex((s) => s.id === activeChunk.id);
   const isLastChunk = chunkIndex === allChunks.length - 1;
@@ -521,10 +523,12 @@ function MarkdownViewerImpl({
     | {
         mode: "create";
         text: string;
+        /** Quote from the text index, without Selection's layout-added line breaks. */
+        quote: string;
         start: number;
         end: number;
-        prefix: string;
-        suffix: string;
+        /** Inside a note kept in the document: copied, but not highlighted. */
+        inNote: boolean;
         x: number;
         /** The selection's box: the menu opens below it, or above when there's no room. */
         top: number;
@@ -533,7 +537,7 @@ function MarkdownViewerImpl({
         /** The selection itself, kept for copying it as Markdown. */
         range?: Range;
       }
-    | { mode: "edit"; hl: Highlight; x: number; top: number; bottom: number; label: string };
+    | { mode: "edit"; mark: Annotation; x: number; top: number; bottom: number; label: string };
   const [menu, setMenu] = useState<HlMenu | null>(null);
   // Whether the AI actions are unfolded in the menu's More list. Kept while the
   // reader stays on the document, so someone who uses AI often opens it once.
@@ -551,16 +555,18 @@ function MarkdownViewerImpl({
     if (!sel) return;
     const range = window.getSelection()?.getRangeAt(0);
     const r = range?.getBoundingClientRect();
-    // Captured now, while the offsets are still true: the surrounding text is
-    // what lets the highlight find itself again after the document is edited.
-    const ctx = contextAround(contentRef.current, sel.start, sel.end);
+    const inNote = (node: Node | undefined) =>
+      !!(node instanceof Element ? node : node?.parentElement)?.closest(".docs-annotation");
     setMenu({
       mode: "create",
       text: sel.text,
+      // Math has a visual layer and an assistive layer. Selection.toString()
+      // omits hidden text and adds layout breaks; anchors must use the same
+      // text index as the offsets, including when saving with a label.
+      quote: textBetween(contentRef.current, sel.start, sel.end),
       start: sel.start,
       end: sel.end,
-      prefix: ctx.prefix,
-      suffix: ctx.suffix,
+      inNote: inNote(range?.startContainer) || inNote(range?.endContainer),
       x: at ? at.x : r ? r.left + r.width / 2 : window.innerWidth / 2,
       top: r ? r.top : (at?.y ?? 120),
       bottom: r ? r.bottom : (at?.y ?? 120),
@@ -571,13 +577,14 @@ function MarkdownViewerImpl({
     });
   };
 
-  const openEditMenu = (hl: Highlight, x: number, box: { top: number; bottom: number }) => {
-    setMenu({ mode: "edit", hl, x, top: box.top, bottom: box.bottom, label: hl.label ?? "" });
+  const openEditMenu = (mark: Annotation, x: number, box: { top: number; bottom: number }) => {
+    setMenu({ mode: "edit", mark, x, top: box.top, bottom: box.bottom, label: mark.label ?? "" });
   };
 
   // Sections the reader has wrapped up, by heading id. Cleared on a document
   // switch: the ids belong to the document that was open.
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => new Set());
   // Reset during render, on an actual switch only. An effect keyed on `file.id`
   // also ran on mount, after the first commit: a fold made while a long
   // document was still mounting could land before that effect flushed, and the
@@ -586,22 +593,40 @@ function MarkdownViewerImpl({
   if (foldsFileId !== file.id) {
     setFoldsFileId(file.id);
     setCollapsedSections(new Set());
+    setExpandedSections(new Set());
+    setView({ fileId: file.id, mode: "preview" });
   }
 
   const collapseCtx = useMemo<CollapseContextValue>(
     () => ({
-      isCollapsed: (headingId) => collapsedSections.has(headingId),
+      isCollapsed: (headingId) =>
+        wrapAll ? !expandedSections.has(headingId) : collapsedSections.has(headingId),
+      showControls: wrapAll,
       toggle: (headingId) =>
-        setCollapsedSections((previous) => {
+        (wrapAll ? setExpandedSections : setCollapsedSections)((previous) => {
           const next = new Set(previous);
           if (next.has(headingId)) next.delete(headingId);
           else next.add(headingId);
           return next;
         }),
     }),
-    [collapsedSections],
+    [collapsedSections, expandedSections, wrapAll],
   );
-  useSectionFolds(contentRef, collapsedSections, `${contentKey}:${editMode}`);
+  useSectionFolds(
+    contentRef,
+    collapsedSections,
+    `${contentKey}:${editMode}`,
+    wrapAll ? expandedSections : undefined,
+  );
+
+  const changeViewMode = (mode: MarkdownViewMode) => {
+    setView({ fileId: file.id, mode });
+    setCollapsedSections(new Set());
+    setExpandedSections(new Set());
+    setMenu(null);
+    window.getSelection()?.removeAllRanges();
+    scrollToTop();
+  };
 
   // Opening a passage from a note's source link: once the target page is rendered,
   // scroll to the passage and flash it. Anchored by quote first (the document
@@ -714,7 +739,10 @@ function MarkdownViewerImpl({
     )
       return menu.range;
     if (menu.mode === "create") return buildRange(container, menu.start, menu.end);
-    return paintedHighlights.current.find((painted) => painted.hl.id === menu.hl.id)?.range ?? null;
+    return (
+      paintedHighlights.current.find((painted) => painted.mark.span.start === menu.mark.span.start)
+        ?.range ?? null
+    );
   };
 
   /** The file span of the menu's range (lib/markdown/source-address.ts). */
@@ -745,56 +773,72 @@ function MarkdownViewerImpl({
     setPendingSelect(span ?? { start: Math.max(0, chunkStart), end: Math.max(0, chunkStart) });
   };
 
+  /** Rewrite the document, through the same path a checkbox toggle takes. */
+  const writeContent = (content: string) => {
+    if (content === liveContentRef.current) return false;
+    liveContentRef.current = content;
+    onContentChange(file.id, content);
+    return true;
+  };
+
+  /**
+   * The selection's span in the file: its own address, read off the rendered
+   * blocks, or for content the renderer couldn't address (converted HTML) its
+   * text, preferring the page on screen.
+   */
+  const selectionSpan = (text: string): SourceSpan | null => {
+    const addressed = menuAddress();
+    if (addressed) return addressed;
+    const chunkStart = singleMode ? -1 : file.content.indexOf(activeChunk.content);
+    const prefer =
+      chunkStart >= 0
+        ? { from: chunkStart, to: chunkStart + activeChunk.content.length }
+        : undefined;
+    return locateInSource(file.content, text, prefer, { exactOnly: true });
+  };
+
+  const highlightSelection = (color: AnnotationColor) => {
+    if (menu?.mode !== "create") return;
+    const span = selectionSpan(menu.quote);
+    const result = span && addHighlight(liveContentRef.current, span, color, menu.label);
+    if (!result) toast.error("This passage can't be highlighted.", { id: "annotate-failed" });
+    else if (writeContent(result.content))
+      onAnnotated?.({ kind: "highlight", fileId: file.id, at: result.at });
+    window.getSelection()?.removeAllRanges();
+    setMenu(null);
+  };
+
+  /** Recolour, relabel or remove the mark the menu was opened on. */
+  const editMark = (change: { color?: AnnotationColor; label?: string } | "remove") => {
+    if (menu?.mode !== "edit") return;
+    // Found again in the live text, in case it changed since the click.
+    const mark = findAnnotation(liveContentRef.current, menu.mark);
+    if (mark)
+      writeContent(
+        change === "remove"
+          ? removeAnnotation(liveContentRef.current, mark)
+          : changeAnnotation(liveContentRef.current, mark, change),
+      );
+    setMenu(null);
+  };
+
   /**
    * Keep the selection as a note: its content as clean Markdown (see
-   * selection-markdown.ts), plus a quote anchor to find it again by.
+   * selection-markdown.ts), written into the document after the passage as a
+   * ```note block (annotations.ts).
    *
    * The saved range is preferred; if a re-render has since replaced the nodes
    * it pointed into, it is rebuilt from the offsets taken when the menu opened.
    */
   const copyToNotes = () => {
     const container = contentRef.current;
-    if (!onCopyToNotes || !container || menu?.mode !== "create") return;
+    if (!container || menu?.mode !== "create") return;
     const range = menuRange();
-    const address = range ? addressOfRange(container, range, file.content) : null;
-    const content =
+    const body =
       (range && selectionToMarkdown(range, container, diagramSourceOf)) || menu.text.trim();
-
-    // The heading the passage sits under. Paged mode strips each page's own
-    // title from the render (it is the masthead), so the page stands in for it.
-    let heading: HTMLElement | null = null;
-    if (range) {
-      for (const candidate of container.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")) {
-        const before =
-          candidate.contains(range.startContainer) ||
-          !!(
-            candidate.compareDocumentPosition(range.startContainer) &
-            Node.DOCUMENT_POSITION_FOLLOWING
-          );
-        if (!before) break;
-        if (candidate.id) heading = candidate;
-      }
-    }
-    const page = singleMode ? undefined : activeChunk;
-    onCopyToNotes({
-      content,
-      source: {
-        // From the same text index `findAnchor` searches when the note is
-        // followed back. `Selection.toString()` is layout-aware (it adds line
-        // breaks around KaTeX's spans), so it never matches that index exactly
-        // across an equation, and the jump would flash only a prefix.
-        quote: textBetween(container, menu.start, menu.end) || menu.text,
-        prefix: menu.prefix,
-        suffix: menu.suffix,
-        start: menu.start,
-        end: menu.end,
-        subtopicId: page?.id,
-        headingId: heading?.id ?? page?.id,
-        sectionTitle: heading?.textContent?.trim() || page?.title,
-        // Where in the file, which is what the link back follows first.
-        anchor: address ? anchorSpan(file.content, address) : undefined,
-      },
-    });
+    const result = addNote(liveContentRef.current, selectionSpan(menu.quote), body);
+    if (result && writeContent(result.content))
+      onAnnotated?.({ kind: "note", fileId: file.id, at: result.at });
     window.getSelection()?.removeAllRanges();
     setMenu(null);
   };
@@ -856,20 +900,25 @@ function MarkdownViewerImpl({
     openCreateMenu({ x: e.clientX, y: e.clientY });
   };
 
-  const paintedHighlights = useRef<Array<{ hl: Highlight; range: Range }>>([]);
+  // Highlights are part of the Markdown (lib/markdown/annotations.ts): each
+  // fence names the passage above it, already resolved to a file span.
+  const marks = useMemo(
+    () => parseAnnotations(file.content).filter((a) => a.kind === "highlight" && a.target),
+    [file.content],
+  );
+  const paintedHighlights = useRef<Array<{ mark: Annotation; range: Range }>>([]);
 
-  // Paint persistent highlights with the CSS Custom Highlight API — no DOM
-  // mutation, so React re-renders never wipe them and cross-node selections
-  // highlight correctly. Groups map to ::highlight(dc-hl-N) rules in the CSS.
+  // Paint highlights with the CSS Custom Highlight API — no DOM mutation, so
+  // React re-renders never wipe them and cross-node selections highlight
+  // correctly. Groups map to ::highlight(dc-hl-N) rules in the CSS. A mark's
+  // span is found on the page by source address, so there is nothing to
+  // re-anchor: editing the document moves the fence with its passage.
   useEffect(() => {
     const container = contentRef.current;
     const painter = createHighlightPainter();
-    if (!container || !painter.supported || !highlights.length) return;
-    // Mid-edit the rendered document is a moving target (the draft autosaves
-    // every 400ms). Re-anchoring waits for the reader to leave the editor.
-    // It also waits for a long document to finish mounting: anchoring against
-    // part of it could settle on an earlier repeat of the quote, and write that
-    // wrong position back as a repair.
+    if (!container || !painter.supported || !marks.length) return;
+    // Mid-edit the rendered document is a moving target, and a long document
+    // is painted once all of it has mounted.
     if (!settled) return;
 
     // Deferred to the next frame so adding a highlight doesn't repaint every
@@ -877,92 +926,21 @@ function MarkdownViewerImpl({
     const paint = () => {
       paintedHighlights.current = [];
       const groups: Record<string, Range[]> = {};
-      // Corrections found along the way, written back once at the end.
-      const repairs: Array<{ id: string; patch: Partial<Highlight> }> = [];
-
-      for (const hl of highlights) {
-        // Which highlights this container can show, and whether its offsets are
-        // measured in the same space as the stored ones. Section highlights
-        // carry offsets relative to their section, meaningless in the whole-doc
-        // render; whole-doc highlights are the reverse.
-        const sectionExists = !hl.subtopicId || knownChunkIds.has(hl.subtopicId);
-        let owned: boolean;
-        if (singleMode) {
-          owned = !hl.subtopicId;
-        } else {
-          // A stale subtopicId means the heading it was slugged from was edited.
-          // Rather than dropping the highlight, let the current page try to
-          // re-anchor it by text and adopt it if the text is here.
-          if (hl.subtopicId && sectionExists && hl.subtopicId !== activeChunk.id) continue;
-          owned = hl.subtopicId === activeChunk.id;
+      for (const mark of marks) {
+        // Null when the passage is on another page.
+        const hit = rangeOfAddress(container, mark.target!, file.content);
+        if (!hit) continue;
+        let range = hit.range;
+        if (hit.atomic) {
+          range = document.createRange();
+          // The equation itself: its number beside it is chrome, not the passage.
+          range.selectNodeContents(hit.atomic.querySelector(".docs-math-rendered") ?? hit.atomic);
         }
-
-        // Fast path: the stored offsets still cover the stored text.
-        let range: Range | null = null;
-        if (owned && typeof hl.start === "number" && typeof hl.end === "number") {
-          const at = buildRange(container, hl.start, hl.end);
-          if (at && !at.collapsed && sameQuote(textBetween(container, hl.start, hl.end), hl.text)) {
-            range = at;
-          }
-        }
-
-        // The document moved under the highlight (an edit above it, a rewritten
-        // passage, a renamed section). Find the passage again by its text.
-        if (!range) {
-          const anchor = findAnchor(container, hl.text, hl.prefix, hl.suffix, hl.start);
-          if (anchor) {
-            range = buildRange(container, anchor.start, anchor.end);
-            // Only persist offsets measured in this highlight's own space —
-            // writing whole-doc offsets onto a section highlight (or the
-            // reverse) would corrupt it for the other reading mode.
-            if (
-              range &&
-              !range.collapsed &&
-              (owned || !sectionExists) &&
-              (hl.start !== anchor.start || hl.end !== anchor.end || hl.orphaned || !sectionExists)
-            ) {
-              repairs.push({
-                id: hl.id,
-                patch: {
-                  start: anchor.start,
-                  end: anchor.end,
-                  ...contextAround(container, anchor.start, anchor.end),
-                  ...(sectionExists
-                    ? null
-                    : { subtopicId: singleMode ? undefined : activeChunk.id }),
-                  ...(hl.orphaned ? { orphaned: false } : null),
-                },
-              });
-            }
-          }
-          // Legacy highlights stored before offsets existed: first match wins,
-          // as before.
-          if (!range) range = firstTextRange(container, hl.text);
-        }
-
-        if (!range || range.collapsed) {
-          // Not on this page. Only call it gone once the markdown source itself
-          // no longer contains the text — in paginated mode the page on screen
-          // says nothing about the rest of the document. Flagged, never
-          // deleted: an edit must not destroy a reader's note.
-          if (!hl.orphaned && !locateInSource(file.content, hl.text)) {
-            repairs.push({ id: hl.id, patch: { orphaned: true } });
-          }
-          continue;
-        }
-        if (hl.orphaned && !repairs.some((r) => r.id === hl.id)) {
-          repairs.push({ id: hl.id, patch: { orphaned: false } });
-        }
-        paintedHighlights.current.push({ hl, range });
-        const g = hlGroup(hl.color);
-        (groups[g] ||= []).push(range);
+        if (range.collapsed) continue;
+        paintedHighlights.current.push({ mark, range });
+        (groups[hlGroup(colorHex(mark.color))] ||= []).push(range);
       }
-
       painter.paint(groups);
-
-      // Re-runs this effect, which then takes the fast path for every repaired
-      // highlight and produces no further repairs.
-      if (repairs.length) onRepairHighlights?.(repairs);
     };
     let frame = requestAnimationFrame(paint);
     // Syntax plugins, diagrams, folds and embeds can replace text nodes
@@ -978,17 +956,7 @@ function MarkdownViewerImpl({
       paintedHighlights.current = [];
       painter.clear();
     };
-  }, [
-    highlights,
-    activeChunk.id,
-    renderContent,
-    fullRender,
-    settled,
-    singleMode,
-    knownChunkIds,
-    file.content,
-    onRepairHighlights,
-  ]);
+  }, [marks, activeChunk.id, renderContent, fullRender, settled, singleMode, file.content]);
 
   useEffect(() => {
     const container = contentRef.current;
@@ -1020,12 +988,11 @@ function MarkdownViewerImpl({
   // its edit popover (CSS highlights aren't DOM nodes, so we hit-test offsets).
   const onContentClick = (e: React.MouseEvent) => {
     if (editMode || !contentRef.current) return;
-    if (!highlights.length) return; // nothing to hit-test against
+    if (!paintedHighlights.current.length) return; // nothing to hit-test against
     if (!window.getSelection()?.isCollapsed) return; // a drag-select, not a click
     const off = offsetFromPoint(contentRef.current, e.clientX, e.clientY);
     if (off == null) return;
-    // Use the ranges actually painted in this pane, including re-anchored
-    // section highlights shown in whole-document mode and legacy highlights.
+    // Use the ranges actually painted in this pane.
     const point = buildRange(contentRef.current, off, off + 1);
     if (!point) return;
     const hit = paintedHighlights.current.find(({ range }) => {
@@ -1039,7 +1006,7 @@ function MarkdownViewerImpl({
           e.clientY <= rect.bottom,
       );
     });
-    if (hit) openEditMenu(hit.hl, e.clientX, hit.range.getBoundingClientRect());
+    if (hit) openEditMenu(hit.mark, e.clientX, hit.range.getBoundingClientRect());
   };
 
   // Place the menu beside the selection, never on it, so the reader still sees
@@ -1435,7 +1402,7 @@ function MarkdownViewerImpl({
                   <NotebookPen className="h-4 w-4" />
                 </button>
               )}
-              {onToggleReadingMode && (
+              {onToggleReadingMode && viewMode === "preview" && (
                 <button
                   onClick={onToggleReadingMode}
                   title={
@@ -1453,6 +1420,7 @@ function MarkdownViewerImpl({
           ) : undefined
         }
       />
+      {!editMode && <MarkdownViewModes mode={viewMode} onChange={changeViewMode} />}
       <div
         ref={containerRef}
         className="relative flex-1 overflow-y-auto transition-colors duration-500"
@@ -1475,39 +1443,29 @@ function MarkdownViewerImpl({
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="flex items-center gap-1">
-                {/* Colors */}
-                {HL_COLORS.map((color) => {
-                  const active = menu.mode === "edit" ? menu.hl.color === color : false;
-                  return (
-                    <button
-                      key={color}
-                      aria-label={`Highlight ${color}`}
-                      onClick={() => {
-                        if (menu.mode === "create") {
-                          onAddHighlight({
-                            text: menu.text,
-                            color,
-                            label: menu.label.trim() || undefined,
-                            subtopicId: singleMode ? undefined : activeChunk.id,
-                            start: menu.start,
-                            end: menu.end,
-                            prefix: menu.prefix,
-                            suffix: menu.suffix,
-                          });
-                          window.getSelection()?.removeAllRanges();
-                        } else {
-                          onUpdateHighlight(menu.hl.id, { color });
+                {/* Colors. A selection inside a note is copied, not marked:
+                    a note's text is the reader's own, already set apart. */}
+                {!(menu.mode === "create" && menu.inNote) &&
+                  ANNOTATION_COLORS.map(({ name, hex }) => {
+                    const active = menu.mode === "edit" && (menu.mark.color ?? "yellow") === name;
+                    return (
+                      <button
+                        key={name}
+                        aria-label={`Highlight ${name}`}
+                        aria-pressed={menu.mode === "edit" ? active : undefined}
+                        onClick={() =>
+                          menu.mode === "create"
+                            ? highlightSelection(name)
+                            : editMark({ color: name })
                         }
-                        setMenu(null);
-                      }}
-                      className={cn(
-                        "h-5 w-5 rounded-full border-2 border-transparent transition-transform hover:scale-110",
-                        active && "border-foreground",
-                      )}
-                      style={{ backgroundColor: color }}
-                    />
-                  );
-                })}
+                        className={cn(
+                          "h-5 w-5 rounded-full border-2 border-transparent transition-transform hover:scale-110",
+                          active && "border-foreground",
+                        )}
+                        style={{ backgroundColor: hex }}
+                      />
+                    );
+                  })}
 
                 <div className="mx-1 h-4 w-px bg-border" />
 
@@ -1515,7 +1473,7 @@ function MarkdownViewerImpl({
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(
-                      menu.mode === "create" ? menu.text : menu.hl.text,
+                      menu.mode === "create" ? menu.text : menu.mark.body,
                     );
                     setMenu(null);
                   }}
@@ -1525,7 +1483,7 @@ function MarkdownViewerImpl({
                   <Copy className="h-3.5 w-3.5" />
                 </button>
 
-                {menu.mode === "create" && onCopyToNotes && (
+                {menu.mode === "create" && (
                   <button
                     onClick={copyToNotes}
                     className="flex h-7 items-center justify-center rounded px-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -1537,10 +1495,7 @@ function MarkdownViewerImpl({
 
                 {menu.mode === "edit" && (
                   <button
-                    onClick={() => {
-                      onRemoveHighlight(menu.hl.id);
-                      setMenu(null);
-                    }}
+                    onClick={() => editMark("remove")}
                     className="flex h-7 items-center justify-center rounded px-1.5 text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
                     title="Remove highlight"
                   >
@@ -1568,7 +1523,7 @@ function MarkdownViewerImpl({
                   >
                     <DropdownMenuItem
                       onClick={() => {
-                        inspect(menu.mode === "create" ? menu.text : menu.hl.text);
+                        inspect(menu.mode === "create" ? menu.text : menu.mark.body);
                         setMenu(null);
                       }}
                     >
@@ -1576,7 +1531,7 @@ function MarkdownViewerImpl({
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onClick={() => {
-                        copySource(menu.mode === "create" ? menu.text : menu.hl.text);
+                        copySource(menu.mode === "create" ? menu.text : menu.mark.body);
                         setMenu(null);
                       }}
                     >
@@ -1646,36 +1601,24 @@ function MarkdownViewerImpl({
                 )}
               </div>
 
-              {/* Optional Label Input if they want to add one quickly */}
-              <div className="flex items-center gap-1.5 rounded bg-muted/30 px-2 py-0.5 border border-transparent focus-within:border-border transition-colors">
-                <Tag className="h-3 w-3 text-muted-foreground" />
-                <input
-                  value={menu.label || ""}
-                  onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      if (menu.mode === "create") {
-                        onAddHighlight({
-                          text: menu.text,
-                          color: HL_COLORS[0],
-                          label: menu.label.trim() || undefined,
-                          subtopicId: singleMode ? undefined : activeChunk.id,
-                          start: menu.start,
-                          end: menu.end,
-                          prefix: menu.prefix,
-                          suffix: menu.suffix,
-                        });
-                        window.getSelection()?.removeAllRanges();
-                      } else {
-                        onUpdateHighlight(menu.hl.id, { label: menu.label.trim() || undefined });
-                      }
-                      setMenu(null);
-                    }
-                  }}
-                  placeholder="Add a label..."
-                  className="w-full bg-transparent py-1 text-xs outline-none placeholder:text-muted-foreground/60"
-                />
-              </div>
+              {/* Optional label, written on the highlight's fence. */}
+              {!(menu.mode === "create" && menu.inNote) && (
+                <div className="flex items-center gap-1.5 rounded bg-muted/30 px-2 py-0.5 border border-transparent focus-within:border-border transition-colors">
+                  <Tag className="h-3 w-3 text-muted-foreground" />
+                  <input
+                    value={menu.label || ""}
+                    onChange={(e) => setMenu((m) => (m ? { ...m, label: e.target.value } : m))}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      if (menu.mode === "create") highlightSelection("yellow");
+                      else editMark({ label: menu.label.trim() || undefined });
+                    }}
+                    placeholder="Add a label..."
+                    aria-label="Highlight label"
+                    className="w-full bg-transparent py-1 text-xs outline-none placeholder:text-muted-foreground/60"
+                  />
+                </div>
+              )}
             </div>,
             menuContainer ?? document.body,
           )}
@@ -1692,7 +1635,20 @@ function MarkdownViewerImpl({
           // already-narrow screen would be unreadable.
           style={{ "--docs-content-width": `${contentWidth}cqi` } as CSSProperties}
         >
+          {!editMode && viewMode === "tree" && (
+            <MarkdownOutline
+              source={file.content}
+              fileId={file.id}
+              fileName={file.name}
+              onOpen={(headingId) => {
+                changeViewMode("preview");
+                onNav(file.id, headingId);
+                setPendingHeading(headingId);
+              }}
+            />
+          )}
           <article
+            hidden={!editMode && viewMode === "tree"}
             onMouseUp={() => openCreateMenu()}
             onContextMenu={onContextMenu}
             className="docs-prose mx-auto min-w-0 flex-1"
@@ -1766,6 +1722,7 @@ function MarkdownViewerImpl({
                   sourceFile: file,
                 }}
                 onImportAttachments={onImportAttachments}
+                mathPreferences={mathPreferences}
               />
             ) : (
               <div
@@ -1824,6 +1781,7 @@ function MarkdownViewerImpl({
                 }}
               />
             )}
+            {!editMode && viewMode !== "tree" && <div className="not-prose"><NoteConnections fileId={file.id} /></div>}
           </article>
         </div>
 
@@ -1831,7 +1789,7 @@ function MarkdownViewerImpl({
           containerRef={containerRef}
           contentRef={contentRef}
           revision={markdownSource}
-          hidden={editMode}
+          hidden={editMode || viewMode === "tree"}
         />
       </div>
     </div>

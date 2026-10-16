@@ -20,9 +20,9 @@ app had two places to write, and both were wrong for this:
 
 - **The document.** Working in the source pollutes the material being learnt,
   and every false start has to be cleaned out again.
-- **A note.** A note is a copy of a passage, linked back to that passage. Rough
-  work isn't copied from anywhere, is mostly wrong on the way to being right,
-  and gets rewritten constantly.
+- **A note.** A note sits in a document, after the passage it came from
+  (annotations.md). Rough work isn't about one passage, is mostly wrong on
+  the way to being right, and gets rewritten constantly.
 
 ## Mental model
 
@@ -31,7 +31,8 @@ a document's name at the top ("for guide.md") so you can find it again, but
 the paper is never stapled into the document. Two things move work off it, and
 both make a **copy**:
 
-- **Save as note** copies a finished result into a durable note.
+- **Save as note** copies a finished result into a ` ```note ` at the end of
+  the pad's document (or the workspace's `Notes.md`).
 - **Insert into document…** copies it into the document, after a dialog that
   shows exactly what goes where and waits for the reader to confirm.
 
@@ -57,20 +58,19 @@ interface Scratchpad {
 
 Why these choices:
 
-- **A list on the workspace record, beside `notes`**, not a new store or
+- **A list on the workspace record**, not a new store or
   model. Pads then use every path the record already has (autosave, merge,
   backup, transfer) and arrive in the same transaction as the documents.
   The cost: every autosave rewrites the record's metadata row, pads included.
-  That is the same cost notes already pay, and pads are capped at 200k characters each.
-- **The association is optional and outlives the document**, like a note's
-  source. A pad made while reading `guide.md` is linked to it, which only
+  Pads are capped at 200k characters each.
+- **The association is optional and outlives the document.** A pad made while reading `guide.md` is linked to it, which only
   groups it ("This document" first in the picker) and labels it. Unlink it,
   and it belongs to the workspace as a whole. When the document is deleted,
   the pad is marked "Deleted" but still kept.
-- **Notes saved from rough work** carry `origin: { kind: "rough-work",
-  scratchpadId, title }` and an empty `source`. Their link opens the pad, or
-  says it was deleted. `fileId` is the pad's document (or `""`), so the note
-  travels with that document like any other.
+- **Notes saved from rough work** are appended to the end of the pad's
+  document as a ` ```note ` block (annotations.md). A pad with no live
+  document saves into the workspace's `Notes.md`, created on first use. The
+  note is a copy: it has no link back to the pad.
 
 ## Lifecycle
 
@@ -91,7 +91,7 @@ Rename / Duplicate / Link·Unlink ── pure updates, autosaved
 Clear contents… ── confirmation dialog → content "" (Undo in the toast)
 Delete scratchpad ── immediate, Undo in the toast; its journal entry is dropped
    │
-Save as note ── noteFromScratchpad(pad, selection or whole pad) → notes
+Save as note ── addNote(document, null, selection or whole pad) → rewriteDocument
 Insert into document… ── InsertDialog (what, where) → Insert
        → DocsApp.insertRoughWork: re-check → insertIntoDocument → handleContentChange
        → open its page, flash it (pendingSaved with the exact span) → Undo in the toast
@@ -154,9 +154,9 @@ it.
 | Backup export/import | validated in `import-schema.ts`: blank titles repaired, bad links dropped, duplicate ids and oversize pads rejected; old backups import with `[]` |
 | Move a document to another workspace | linked pads follow it (renumbered with it); unlinked pads stay |
 | Share links | **never included**, with or without annotations |
-| Storage accounting | pad titles + content and note content count, as UTF-8 (`recordTextBytes`) |
+| Storage accounting | pad titles + content count, as UTF-8 (`recordTextBytes`); notes are document text |
 
-Storage accounting is new for notes too: the summary row's total
+Storage accounting covers pads: the summary row's total
 (`putWorkspaces`), the lazy re-measure of older rows (`storedBytesByWorkspace`,
 which now reads the workspace row), the open workspace counted from memory
 (`OpenWorkspace`), backup imports (`storedRecordBytes`), and Settings ▸
@@ -232,7 +232,7 @@ equations near the screen, not all 600.
 ## Tests
 
 - `tests/rough-work.test.ts` (18): model (titles, edit/rename/link
-  no-ops, duplicate, ordering, selection), note origin and search, insertion
+  no-ops, duplicate, ordering, selection), saving a note into a document, insertion
   points and exact spans, backup round trip and validation, IndexedDB reload,
   stored bytes (summary, legacy re-measure, open workspace; mutation-checked),
   two-tab merge and conflict, transfer, share exclusion, journal settle and

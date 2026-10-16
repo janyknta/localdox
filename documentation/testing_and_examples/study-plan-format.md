@@ -1,6 +1,6 @@
 # Study plans
 
-> The app no longer imports study-plan bundles (`.plan.json`, `.practice.md`). An exam is now a `.xam` paper and an `.xrule`, organised in an Exam Workspace's folders, and practice is its own `.xp` file; see [Exam and practice files](../documentation/exam-files.md). Papers no longer have Learn, Practice or Review steps. This page remains as a reference for data made by the earlier screens.
+> The app no longer imports study-plan bundles (`.plan.json`, `.practice.md`). An exam is now a `.xam` paper and an `.xrule`, organised in a workspace's folders, and practice is its own `.xp` file; see [Exam and practice files](../documentation/exam-files.md). Papers no longer have Learn, Practice or Review steps. This page remains as a reference for data made by the earlier screens.
 
 Everything stays in this browser (IndexedDB). There are no accounts, dates, schedules or reminders.
 

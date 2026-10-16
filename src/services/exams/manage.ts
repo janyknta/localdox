@@ -1,6 +1,6 @@
 /**
  * Exam files as Settings shows them: what is stored, roughly how big, and a
- * delete. Exam Workspaces holds the "localdox-exam-writer" lock while it is open
+ * delete. An open exam paper holds the "localdox-exam-writer" lock while it is open
  * and keeps everything in memory, so deleting under it would be overwritten
  * by its next save. Delete therefore runs only when that lock is free.
  */
@@ -151,7 +151,7 @@ export async function clearAllExamStorage(): Promise<void> {
       examWriterLock(scopes[index]),
       { ifAvailable: true },
       async (lock) => {
-        if (!lock) throw new Error("Close Exam Workspaces in other tabs before clearing storage.");
+        if (!lock) throw new Error("Close exam papers in other tabs before clearing storage.");
         await run(index + 1);
       },
     );

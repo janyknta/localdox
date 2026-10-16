@@ -18,7 +18,7 @@ import { mathExpression, mathSeedFrom, type FormatAction } from "@/lib/markdown/
 import { toolbarShortcut } from "@/lib/markdown/markdown-toolbar-items";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 import { DraftJournalContext } from "./draft-journal-context";
-import { markEditorOpen } from "./open-editors";
+import { markEditorOpen, registerEditorWriter } from "./open-editors";
 import { hashText } from "@/lib/workspace/draft-journal";
 
 const AUTOSAVE_MS = 600;
@@ -60,7 +60,7 @@ interface Props {
   /** Leave the editor, keeping the current draft. Passes back the cursor's source index. */
   onDone: (cursorIndex?: number, content?: string) => void;
   /** Leave the editor, restoring `initialContent`. Passes back the cursor's source index. */
-  onCancel: (cursorIndex?: number) => void;
+  onCancel: (cursorIndex?: number, content?: string) => void;
   /** Shown when "Inspect in source" couldn't pin the text to a source span. */
   inspectMissed?: boolean;
   /**
@@ -86,6 +86,7 @@ interface Props {
   onRename?: (name: string) => void;
   mediaContext?: MediaContext;
   onImportAttachments?: (files: File[]) => Promise<MdFile[]>;
+  mathPreferences?: import("@/services/math/types").MathPreferences;
 }
 
 function MarkdownEditorImpl(
@@ -101,6 +102,7 @@ function MarkdownEditorImpl(
     onRename,
     mediaContext,
     onImportAttachments,
+    mathPreferences,
   }: Props,
   handleRef: React.Ref<MarkdownEditorHandle>,
 ) {
@@ -116,6 +118,13 @@ function MarkdownEditorImpl(
   // impossible to form: every save checks that the draft's own id still matches
   // the document being edited, and drops the write if it doesn't.
   const [draft, setDraft] = useState(() => ({ fileId, text: initialContent }));
+  const [editorMode, setEditorMode] = useState<"source" | "live">(() => {
+    try { return localStorage.getItem("localdox:editor-mode") === "live" ? "live" : "source"; } catch { return "source"; }
+  });
+  const changeEditorMode = (mode: "source" | "live") => {
+    setEditorMode(mode);
+    try { localStorage.setItem("localdox:editor-mode", mode); } catch { /* A mode preference never blocks editing. */ }
+  };
   const sourceRef = useRef<MarkdownSourceHandle>(null);
   const setText = useCallback(
     (text: string | ((previous: string) => string)) =>
@@ -130,6 +139,17 @@ function MarkdownEditorImpl(
   // (and re-bound) on every keystroke.
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const cancelBaseline = useRef(initialContent);
+  useEffect(() => registerEditorWriter(fileId, {
+    read: () => sourceRef.current?.selection().text ?? draftRef.current.text,
+    rewrite: (transform) => {
+      cancelBaseline.current = transform(cancelBaseline.current);
+      const text = transform(sourceRef.current?.selection().text ?? draftRef.current.text);
+      draftRef.current = { fileId, text };
+      sourceRef.current?.replace(text);
+      setText(text);
+    },
+  }), [fileId, setText]);
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   // The window-level Cmd/Ctrl+S handler is bound once, so it reads the live id
@@ -343,8 +363,8 @@ function MarkdownEditorImpl(
     // An abandoned draft is not something to offer back after a reload.
     const context = draftsRef.current;
     if (context?.workspaceId) context.journal.discard(context.workspaceId, draftRef.current.fileId);
-    setText(initialContent);
-    onCancel(sourceRef.current?.selection().start);
+    setText(cancelBaseline.current);
+    onCancel(sourceRef.current?.selection().start, cancelBaseline.current);
   }, [initialContent, onCancel, setText]);
 
   return (
@@ -423,6 +443,9 @@ function MarkdownEditorImpl(
         onInsert={insertMath}
       />
       <div className="overflow-hidden rounded-lg border border-border bg-muted/30 focus-within:border-primary/50">
+        <div role="group" aria-label="Editing mode" className="flex items-center gap-1 border-b border-border bg-background px-3 py-2">
+          {([ ["live", "Live Preview"], ["source", "Source"] ] as const).map(([mode, label]) => <button key={mode} type="button" aria-pressed={editorMode === mode} onClick={() => changeEditorMode(mode)} className={`min-h-8 rounded-md px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring coarse:min-h-11 ${editorMode === mode ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted"}`}>{label}</button>)}
+        </div>
         <div className="border-b border-border bg-background/90">
           <MarkdownToolbar
             onAction={applyFormat}
@@ -436,6 +459,9 @@ function MarkdownEditorImpl(
             ref={sourceRef}
             initialContent={initialContent}
             onChange={setText}
+            mode={editorMode}
+            mediaContext={mediaContext}
+            mathPreferences={mathPreferences}
           />
         </div>
       </div>

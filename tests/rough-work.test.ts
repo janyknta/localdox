@@ -1,5 +1,5 @@
-// Rough work: the scratchpad model, taking work out of a pad (into a note or a
-// document), and a pad's journey through storage — autosave, reload, two-tab
+// Rough work: the scratchpad model, taking work out of a pad (into a
+// document, where a note saved from a pad is kept too), and a pad's journey through storage — autosave, reload, two-tab
 // merge, backup, moving documents, share links, storage accounting and draft
 // recovery. The panel itself is covered by tests/e2e/rough-work.spec.ts.
 
@@ -15,7 +15,6 @@ import {
   insertionPoints,
   linkScratchpad,
   MAX_SCRATCHPAD_CHARS,
-  noteFromScratchpad,
   pageAt,
   renameScratchpad,
   scratchpadDraftId,
@@ -25,7 +24,7 @@ import {
   sortScratchpads,
   type Scratchpad,
 } from "../src/lib/workspace/rough-work.ts";
-import { searchNotes } from "../src/lib/workspace/notes.ts";
+import { addNote, parseAnnotations } from "../src/lib/markdown/annotations.ts";
 import {
   newWorkspaceRecord,
   parseWorkspaceImport,
@@ -159,18 +158,15 @@ test("an action applies to the selection, or to the whole pad when nothing is se
   assert.equal(selectedWork("   \n", 0, 0), null);
 });
 
-test("a note saved from rough work links back to the pad and is found by its title", () => {
-  const p = pad("a", { title: "Quadratics", fileId: "guide", fileName: "guide.md" });
-  const note = noteFromScratchpad(p, "$x = 2$", 42);
-  assert.deepEqual(note.origin, { kind: "rough-work", scratchpadId: "a", title: "Quadratics" });
-  assert.equal(note.fileId, "guide", "travels with the pad's document");
-  assert.equal(note.content, "$x = 2$");
-  assert.equal(note.createdAt, 42);
-  assert.equal(noteFromScratchpad(pad("b"), "y").fileId, "", "no document, no file id");
-  assert.deepEqual(
-    searchNotes([note], "quadratics").map((n) => n.id),
-    [note.id],
-  );
+test("a note saved from rough work is appended to its document as a note fence", () => {
+  const placed = addNote(DOC, null, "$x = 2$")!;
+  assert.ok(placed.content.startsWith(DOC.trimEnd()), "the document is otherwise unchanged");
+  assert.ok(placed.content.endsWith("\n\n```note\n$x = 2$\n```\n"));
+  const [note] = parseAnnotations(placed.content).slice(-1);
+  assert.equal(note.kind, "note");
+  assert.equal(note.span.start, placed.at);
+  // A pad with no document starts a Notes.md of its own.
+  assert.equal(addNote("", null, "loose")!.content, "```note\nloose\n```\n");
 });
 
 // ---- inserting into a document ---------------------------------------------------
@@ -227,15 +223,13 @@ function workspaceWithPads(): WorkspaceRecord {
     // Its document is gone; the pad is still the reader's.
     pad("p3", { fileId: "deleted-doc", fileName: "old.md" }),
   ];
-  ws.notes = [{ ...noteFromScratchpad(ws.scratchpads[0], "$x = 2$", 3), id: "n1" }];
   return ws;
 }
 
-test("rough work and notes taken from it survive a backup export and import", async () => {
+test("rough work survives a backup export and import", async () => {
   const ws = workspaceWithPads();
   const restored = parseWorkspaceImport(await serializeWorkspace(ws));
   assert.deepEqual(restored.scratchpads, ws.scratchpads);
-  assert.deepEqual(restored.notes, ws.notes, "a note's rough-work origin is kept");
 });
 
 test("a backup written before rough work existed imports with none", async () => {
@@ -286,15 +280,14 @@ test("rough work survives a reload: IndexedDB stores and returns it unchanged", 
   );
 });
 
-test("rough work and notes count toward stored bytes, saved and in memory", async () => {
+test("rough work counts toward stored bytes, saved and in memory", async () => {
   await persistence.clearAll();
   const ws = workspaceWithPads();
   const docBytes = utf8Length(DOC) + utf8Length("Other");
   const text = recordTextBytes(ws);
   assert.equal(
     text,
-    utf8Length("$x = 2$") +
-      ws.scratchpads!.reduce((sum, p) => sum + utf8Length(p.title) + utf8Length(p.content), 0),
+    ws.scratchpads!.reduce((sum, p) => sum + utf8Length(p.title) + utf8Length(p.content), 0),
   );
   await persistence.putWorkspace(ws);
   const summary = async () =>
@@ -326,7 +319,6 @@ test("rough work and notes count toward stored bytes, saved and in memory", asyn
   const open = await measureStoredBytes(() => ({
     id: ws.id,
     files: ws.files,
-    notes: [],
     scratchpads: typing,
   }));
   assert.equal(open, docBytes + utf8Length("Quadratics") + 1_000);

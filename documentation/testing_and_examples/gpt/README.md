@@ -5,8 +5,8 @@ One custom GPT for every kind of Localdox content:
 | Ask for | You get | How it gets into Localdox |
 | :-- | :-- | :-- |
 | "Teach me how HTTPS works" | A lesson (`.md`) | + ▸ Upload files, or paste into + ▸ File |
-| "25 practice questions on Bayes' theorem" | A practice set (`.xp`) | Exam Workspace ▸ + ▸ Upload files |
-| "Probability mock on X, Y, Z, medium, 100 questions, with PYQs" | Exam rules (`.xrule`) + paper (`.xam`) | Exam Workspace ▸ + ▸ Upload files (both at once) |
+| "25 practice questions on Bayes' theorem" | A practice set (`.xp`) | Workspace ▸ + ▸ Upload files |
+| "Probability mock on X, Y, Z, medium, 100 questions, with PYQs" | Exam rules (`.xrule`) + paper (`.xam`) | Workspace ▸ + ▸ Upload files (both at once) |
 | "GATE-style rules: 3 hours, 1/3 negative marking" | A ruleset (`.xrule`) | Upload, then Settings ▸ Exam rules |
 | "A GATE DA study plan" | A workspace backup (`.json`) with a folder per topic | Settings ▸ Workspace ▸ Transfer ▸ Import workspace |
 
@@ -38,9 +38,9 @@ The instructions tell the GPT to run `python /mnt/data/localdox_check.py`, the f
 
 ## Using what it produces
 
-1. **Make an Exam Workspace first:** Settings ▸ Workspace ▸ New, kind **Exam**. An upload made with no workspace open creates a Reader workspace, where papers only preview.
+1. **Use any workspace:** upload files into the current workspace, or make one in Settings ▸ Workspace ▸ New. An upload made with no workspace open creates a workspace automatically. Exam and practice files run in every workspace.
 2. **Loose files:** + ▸ **Upload files** and select the `.xrule`, `.xam`, `.xp` and any images **together**. Everything lands at the workspace root; make folders with + ▸ Folder and drag papers and practice sets in. Rulesets don't appear in the sidebar; they're under Settings ▸ Exam rules. Zips are not unpacked.
-3. **A backup `.json`:** Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**. It creates a new Exam Workspace with its folders.
+3. **A backup `.json`:** Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**. It creates a new workspace with its folders.
 4. **A lesson:** copy the answer with ChatGPT's copy button (Markdown source), then + ▸ File, a name ending `.md`, and paste.
 5. **If a file is refused,** Localdox lists each problem with its file and line ("probability-mock-1.xam:14: Wrong option count"). Paste that back to the GPT and ask for the corrected file.
 

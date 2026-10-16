@@ -74,15 +74,14 @@ export function storedBytes(files: readonly { content: string; data?: FileData }
 
 /**
  * Text the reader wrote that the workspace record holds beside its documents:
- * notes and rough work. Small next to documents as a rule, but unbounded in
- * number, so it counts toward the same cap.
+ * rough work. (Highlights and notes are part of each document's Markdown, so
+ * `storedFileBytes` already counts them.) Small next to documents as a rule,
+ * but unbounded in number, so it counts toward the same cap.
  */
 export function recordTextBytes(record: {
-  notes?: readonly { content: string }[];
   scratchpads?: readonly { title: string; content: string }[];
 }): number {
   let total = 0;
-  for (const note of record.notes ?? []) total += utf8Length(note.content);
   for (const pad of record.scratchpads ?? [])
     total += utf8Length(pad.title) + utf8Length(pad.content);
   return total;
@@ -91,7 +90,6 @@ export function recordTextBytes(record: {
 /** Bytes a whole workspace record occupies: its documents plus `recordTextBytes`. */
 export function storedRecordBytes(record: {
   files: readonly { content: string; data?: FileData }[];
-  notes?: readonly { content: string }[];
   scratchpads?: readonly { title: string; content: string }[];
 }): number {
   return storedBytes(record.files) + recordTextBytes(record);

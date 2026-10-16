@@ -3,10 +3,10 @@ import { Section, Group, Row, Empty } from "./primitives";
 import { formatBytes } from "@/lib/workspace/storage-limits";
 import type { StoredExamFile } from "@/services/exams/manage";
 
-// Exam Workspaces keeps its own database; its code loads only when this shows.
+// Exam sessions use their own database; its code loads only when this shows.
 const manage = () => import("@/services/exams/manage");
 
-/** Exams and study plans uploaded to Exam Workspaces, each deletable. */
+/** Exams and study plans stored across your workspaces, each deletable. */
 export function ExamFiles() {
   const [files, setFiles] = useState<StoredExamFile[] | null>(null),
     [deleting, setDeleting] = useState<string | null>(null),
@@ -44,7 +44,7 @@ export function ExamFiles() {
   return (
     <Section
       title="Exam files"
-      description="Exams and study plans you uploaded to Exam Workspaces. Deleting one also deletes its attempts and progress."
+      description="Exams and study plans you stored across your workspaces. Deleting one also deletes its attempts and progress."
     >
       <Group>
         {files === null ? (

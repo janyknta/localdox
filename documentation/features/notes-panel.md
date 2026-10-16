@@ -1,88 +1,66 @@
 # Notes panel
 
-Select text in a Markdown document, choose **Copy selection to notes**, and the
-passage is kept as clean Markdown in a panel beside the document. The source
-document is never modified. Each note links back to the passage it came from.
+Select text in a Markdown document and choose **Copy selection to notes**. The
+passage is written into the document as clean Markdown, in a ` ```note ` block
+right after it, and listed in a panel beside the document together with every
+highlight. Notes and highlights are kept in the documents themselves; the
+panel stores nothing. The format, and why, is in
+[annotations.md](annotations.md).
 
 ## The problem
 
-Readers already had a way to keep something, and it doesn't fit "I want this
-passage, in my own words, next to what I'm reading":
-
-- A **highlight** is a live mark _on_ the document. It moves when the text
-  moves and is orphaned when the text is deleted. You can't edit the passage,
-  only label it.
-
-A note is the other thing: a **copy**. Once taken, it belongs to the
-reader. They can edit it, search it, and copy it out. Editing or deleting the
-source never reaches into it.
+A **highlight** marks the document's own words. A reader also wants the other
+thing: the passage _in their own words_, editable, searchable, and easy to
+copy out. That is a note. It starts as a clean copy of the selection, and the
+reader rewrites it.
 
 ## Mental model
 
-Think of a note as a photocopy with a sticky tab. The photocopy (the Markdown
-`content`) never changes unless you write on it. The tab (`source`) says where
-the original was, so you can go back and look. If the original page has moved,
-the tab still finds it. If it was torn out, the tab says so instead of opening
-the wrong page.
+A note is a sticky note pressed onto the page, right under the paragraph it
+came from. It is part of the page, so it is wherever the document is:
+downloaded, copied, shared (by opt-in), or moved to another workspace. The
+panel is a table of contents of every sticky note and highlight in the
+workspace, not a separate notebook.
 
 ## Data model
 
-`src/lib/workspace/notes.ts`, stored as `WorkspaceRecord.notes`:
+There is no `Note` record. `lib/workspace/notes.ts` reads entries out of the
+documents:
 
 ```ts
-interface Note {
-  id: string;
-  fileId: string; // source document; kept after it is deleted
-  fileName: string; // name at copy time; shown only once the source is gone
-  content: string; // the passage, as Markdown (≤ 200,000 chars)
-  source: {
-    quote: string; // rendered text of the selection (textContent): the anchor
-    prefix?: string; // ~48 chars of rendered text either side,
-    suffix?: string; //   to tell repeated passages apart
-    start?: number; // offsets in the rendered page at copy time (hint only)
-    end?: number;
-    subtopicId?: string; // page (H1 section) it was on; absent in single-page mode
-    headingId?: string; // nearest heading above, used when the passage is gone
-    sectionTitle?: string; // shown on the source link
-  };
-  createdAt: number;
-  updatedAt: number;
+interface NotebookEntry extends Annotation {
+  // lib/markdown/annotations.ts
+  id: string; // `${fileId}#${n}`: the n-th annotation in its document
+  fileId: string;
+  // kind ("note" | "highlight"), color, label, body, span, bodySpan, target
 }
 ```
 
-Why these choices:
-
-- **Quote anchor, not offsets.** Any edit above a passage shifts every offset
-  below it. The quote (with prefix and suffix) is the same scheme highlights
-  use (`text-offsets.ts`), so a note survives edits around it.
-- **The live name wins.** While the document exists, the panel shows its
-  _current_ name, looked up by `fileId`. A rename never leaves a note pointing
-  at a stale name. `fileName` is only a fallback.
-- **Notes outlive documents.** Highlights (and legacy stars) are dropped with their
-  file in import validation and merge. Notes are not: they carry their own
-  text.
+- **Order:** by document in the workspace's file order, then by position.
+  There are no creation times in a Markdown file, so the list is no longer
+  newest-first.
+- **Cached by content:** `documentEntries` re-reads a document only when its
+  text changed, so an autosave of one document re-reads that one alone. The
+  panel reads anything at all only while it is open.
+- **Live documents only:** documents in the Bin, and non-Markdown files, are
+  left out. A binned document's notes come back with it.
 
 ## Flow: copying a selection
 
 ```
 mouseup in the article → MarkdownViewer.openCreateMenu
-   keeps offsets, prefix/suffix and a cloned Range in the menu state
+   keeps a cloned Range in the menu state
 "Copy selection to notes" → copyToNotes
-   selectionToMarkdown(range, container)  ← clean Markdown
-   nearest heading above the selection    ← headingId / sectionTitle
-   onCopyToNotes({ content, source })
-DocsApp.addNote → createNote → setNotes → markDirty → autosave (700 ms)
+   selectionToMarkdown(range, container)       ← clean Markdown
+   addressOfRange → the passage's file span    ← where the note goes
+   addNote(content, span, body)                ← annotations.ts
+   onContentChange(file.id, content)           ← same path as a checkbox
+   onAnnotated → toast, card marked in the panel
 ```
 
 The Range is cloned when the menu opens because the live selection is lost as
 soon as the reader clicks or types in the menu. If a re-render has replaced the
 nodes it points into, the range is rebuilt from the stored offsets.
-
-The quote is taken with `textBetween(container, start, end)`, not
-`Selection.toString()`. Chrome's `toString()` is layout-aware and adds line
-breaks around KaTeX's spans, so it never matches the `textContent` index that
-`findAnchor` searches. A jump across an equation would then flash only the
-longest matching prefix. This was found in the browser, not in the unit tests.
 
 ### Clean Markdown (`src/lib/markdown/selection-markdown.ts`)
 
@@ -121,115 +99,86 @@ MathML text.
 Both steps read nodes through a structural interface (`DomNodeLike`), not
 browser globals, so the conversion is unit-tested in Node.
 
-## Flow: following a source link
+## Flow: opening an entry
 
 ```
-click "guide.md › Measurements" → DocsApp.openNoteSource(note)
-  (a highlight card: openHighlight(h) → highlightSource(h), same path)
-  openPassage(fileId, source)
-  resolveNoteSource({ source }, file) pure; reads Markdown, not the DOM
-    no file            → toast "no longer in this workspace"
-    file in Bin        → toast "is in the Bin" (restore from Settings ▸ Storage)
-    anchor holds       → handleSelect(file, page the span is on now)
-                         + setPendingSaved({ span, quote, … })
-                         → rangeOfAddress(span): exactly that occurrence
-    quote found        → same, landing by quote (notes from before addressing,
-                         or a span whose own head/tail was edited)
-    quote gone         → open the heading it sat under (or its page) + toast
+click a card → DocsApp.openEntry(entry)
+  findAnnotation(file.content, entry)     the same block in the current text
+  span = highlight ? target : bodySpan
+  handleSelect(file, pageOf(file, span))  open the page that holds it
+  setPendingSaved({ span })               → rangeOfAddress → scroll + flash
 ```
 
-**First, the source anchor.** A note copied after source addressing existed
-stores `source.anchor`: its file span plus that span's first and last 32
-source characters. `relocateAnchor` keeps the span if the file still has the
-same text there. If text was added or removed elsewhere, it finds the
-occurrence nearest the old position. Only when the passage's own edges were
-edited does it give up and fall through to the quote. This is what makes a link
-to the _second_ of two identical sentences land on the second one. See
-`documentation/source-addressing.md`.
-
-**Then, the quote.** `resolveNoteSource` searches the document's Markdown with
-`locateInSource` in **exact mode**. Inspect's fuzzy fallbacks (a prefix, a rare word) are fine for
-placing a caret _near_ lost text, but would make a link claim a deleted passage
-still exists. It tries the whole quote first, then each line of the quote that
-is at least 20 characters long. A selection that crossed an equation carries
-KaTeX glyphs the Markdown never contains, but its plain lines still match
-exactly. Lines shorter than 20 characters ("Introduction") recur too often to
-trust. The page the note came from is searched first, so a repeated passage
-resolves to the reader's own copy.
-
-Once the right page is open, the viewer re-finds the exact characters with
-`findAnchor` (same quote, prefix and suffix) and flashes them. This reuses the
-passage jump (`pendingSaved`, typed `PassageTarget`) that starred items used
-before starring was removed. In split view, only the
-focused pane takes the jump. The stored `start` offset is passed as a
-tie-breaking hint only when it was measured in the same space: same page, same
-reading mode.
+A highlight opens on the passage it marks. A note, or a highlight whose passage
+is gone, opens on its own card. Because the entry is a file span, the jump is
+exact even when the same sentence appears twice
+([source-addressing.md](source-addressing.md)).
 
 ## Highlights in the list
 
-A highlight is also the reader keeping a passage, so the Notes list shows
-highlights alongside notes. There is no Highlights list in Settings any more.
-A highlight is still a highlight, a live mark rather than a copy. Only where it
-is listed has changed.
+A highlight is listed among the notes, because it is also the reader keeping a
+passage.
 
 - **Shown as a note, not painted.** A column of yellow and pink blocks is
   tiring to read beside a document, and the colour only has to say "this is a
-  highlight". The card shows the text plainly. An 8px dot of its colour sits
-  where a note shows its document icon. Screen readers hear "Highlight in
-  guide.md › Install".
-- **One order.** `notebookEntries(notes, highlights)` sorts both by
-  `createdAt`, newest first. Highlights got an optional `createdAt` for this
-  (set in `DocsApp.addHighlight`, kept by `import-schema.ts`). Older ones have
-  no time. They sort below every dated entry, latest added first, because the
-  array is append-ordered.
-- **Same way back.** `highlightSource(h)` turns the highlight's quote anchor
-  (text, prefix, suffix, page) into a `NoteSource`. `openHighlight` then goes
-  through the same `openPassage` as a note's link: resolve against the
-  Markdown, open the right page, flash the passage.
+  highlight". The card shows the passage's text (its Markdown reduced with
+  `visibleInline`), with an 8px dot of its colour beside the actions. A
+  highlight whose passage is gone says so under its text.
 - **No edit button.** The text is the document's own. Recolouring and labels
-  stay on the mark in the document. A label shows under the text, and search
-  covers text, label, document name and page title (`searchHighlights`).
-- **Delete** removes the mark from the document too. The toast offers
-  **Undo**, as for notes, and ⌘/Ctrl+Z still works through highlight history.
+  stay on the mark in the document. Search covers text, label, document name
+  and page title (`searchEntries`).
+- **Delete** removes the fence from the document, which unpaints the mark. The
+  toast offers **Undo**.
 
-## Persistence
+## Changing a note from the panel
 
-`notes` is threaded through every path a workspace record takes:
-
-| Path                      | Where                                       | Behavior                                                                                   |
-| ------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Autosave / reload         | `DocsApp` `buildRecord`, `hydrateWorkspace` | the record is written as a whole                                                           |
-| Two tabs                  | `merge.ts`                                  | merged by id; the same note edited differently in both tabs is a conflict                  |
-| Backup export/import      | `serializeWorkspace`, `import-schema.ts`    | validated; malformed fields repaired, duplicate ids rejected, old backups import with `[]` |
-| Move to another workspace | `workspace-transfer.ts`                     | notes follow their document, renumbered with it                                            |
-| Share links               | `share.ts`                                  | **never included**: shares upload to an external host, and notes are private               |
-| Storage accounting        | `recordTextBytes`                           | note content counts toward the storage cap, like documents                                 |
-
-No backup version bump was needed. Older builds drop the unknown `notes` field,
-and newer builds default it to `[]`.
-
-Panel open/closed is a per-device convenience in `localStorage`
-(`localdox:notes-open`), not workspace data.
+Edit, Delete and Move to rough work rewrite the document through DocsApp's
+`rewriteDocument`. It reads text still in an open editor first and rewrites
+that editor in place, so the editor's next autosave can't restore the old
+block. Each action finds its block again with `findAnnotation` (same kind and
+body, nearest position). If the block was edited in between, nothing is
+written and the reader is told so.
 
 ## UI
 
+The **Notes** tab offers **Cards** and **File** views. File view merges every
+note and highlight into one read-only `notes.md`, in the same order as the
+cards, preserving the notes' original Markdown (a highlight contributes the
+source text it marks). Entries flow as
+continuous content with blank lines between them; no generated headings,
+source labels, highlight labels, or separator lines are added.
+File view shows clean, rendered content with a copy icon at its top-right to
+copy the merged Markdown. The expand button opens a larger view, and the download
+button in either view saves the whole file. Card search never limits the content,
+copy, or download. The merged file
+updates as notes change and does not create or modify a workspace document.
+
+Each note and highlight card also has a **Move to rough work** icon beside its
+copy and delete actions. It transfers the text to a new scratchpad linked to
+the document, removes the note or highlight from the document, and opens the
+**Rough work** tab. Existing scratchpads are preserved. The toast offers **Undo**;
+if the new scratchpad has been edited, Undo puts the block back in the document
+and keeps those edits in rough work.
+
 The panel has three tabs: **Notes**, **Rough work** (scratchpads; see
 rough-work.md) and **Compute** (an on-device math engine; see
-math-compute.md). A note saved from rough work carries `origin` instead of a
-source passage, and its link opens the scratchpad.
+math-compute.md). A note saved from rough work is appended to the end of the
+pad's document, or to the workspace's `Notes.md` (created on first use) when
+the pad has no document.
 
 - **Desktop (≥1024px):** a docked column (`w-80`, `xl:w-88`) right of the
   reading column, sticky to the viewport. It stays open across documents and
   reloads.
-- **Narrower:** the app's `BottomSheet`. Opening a source link closes the sheet,
+- **Narrower:** the app's `BottomSheet`. Clicking a card closes the sheet,
   since it would cover the passage.
 - Open with the notebook button in the viewer header (`aria-pressed`). Each
-  note shows its source link, its rendered Markdown (folded past 288px, with
-  equations and diagrams drawn; see below), when
-  it was taken or edited, and Copy / Edit / Delete. Edit opens a Markdown
+  note shows its rendered Markdown (folded past 288px, with equations and diagrams
+  drawn; see below) and Copy / Move to rough work / Edit / Delete. Clicking the
+  card opens it in its document. Action icons, links,
+  editing controls, and text selection do not trigger a source jump. Edit opens a Markdown
   textarea: ⌘/Ctrl+Enter saves, Esc cancels. Delete is immediate, with **Undo**
-  in the toast. Search matches every word across content, the source's current
-  name and the section.
+  in the toast. Search matches every word across content, label, the
+  document's current name and the page.
 - The panel downloads on first open (`NotesPanelLazy`, via `deferredModule` so
   a reload with the panel open doesn't pay React's 300 ms Suspense reveal
   throttle). Cards are memoized, so autosave re-renders don't re-parse every
@@ -307,13 +256,12 @@ as the document's first render. After reload, the note's equations appear
 
 ## Debugging
 
-- **"Passage is no longer in the document" when it obviously is.** The quote
-  probably crosses rendered-only text and has no plain line of 20+ characters.
-  Check with `locateInSource(file.content, line, undefined, { exactOnly: true })`.
-- **The right page opens but nothing flashes.** The source match succeeded and
-  the DOM match didn't. Compare `note.source.quote` with the page's rendered
-  text (`textBetween`). A different math renderer since copy time changes the
-  glyph text.
+- **A note is missing from the panel.** Its fence isn't recognised (indented,
+  inside a list or quote, or a misspelt info word), or its document is in the
+  Bin. `parseAnnotations(file.content)` shows what the panel sees.
+- **The right page opens but nothing flashes.** `rangeOfAddress` couldn't
+  place the span: the content has no `data-src` stamps (converted HTML), or
+  the note's body is empty.
 - **An equation stays as source.** Off screen (by design); KaTeX can't parse
   it, or the renderer preference isn't KaTeX and the document hasn't drawn it
   (`renderMathIdle` returns `undefined`); or KaTeX failed to download.
@@ -337,20 +285,20 @@ as the document's first render. After reload, the note's equations appear
 - Local images (blob URLs) copy as their alt text. The URL dies with the page.
 - With no documents left in the workspace, the empty-workspace screen has no
   viewer, so the Notes panel can't be opened until a document is added.
+- Deleting a document deletes its notes: they are part of it.
+- Notes and highlights can only be made in Markdown and text documents.
 
 ## Tests
 
-- `tests/notes.test.ts` (29 cases): clean copy (formatting, chrome removal, lists,
-  tables, code, math, callouts, element boundaries), snapshot semantics,
-  search, highlights in the list (order with and without a time, search,
-  following one back, `createdAt` through a backup), anchors that moved,
-  repeated, crossed math, broke, or lost their document, and storage (backup round trip, validation, IndexedDB,
-  two-tab merge, cross-workspace move).
-- `tests/e2e/notes.spec.ts`: select a paragraph and a list on page 2 → copy →
-  verify the stored Markdown → reload → search → follow the link from page 1
-  back to the flashed passage. Plus the narrow-screen sheet, and a note with an
-  equation and a Mermaid diagram: stored as `$…$` plus a fence, drawn from the
-  cache, drawn again after a reload, with unique SVG ids.
+- `tests/notes.test.ts`: clean copy (formatting, chrome removal, lists,
+  tables, code, math, callouts, element boundaries), and the list read out of
+  documents (order, ids, caching, Bin and non-Markdown files left out, search,
+  pages, merged file).
+- `tests/annotations.test.ts`: the fence format itself (see annotations.md).
+- `tests/e2e/notes.spec.ts`: copy to notes → the ` ```note ` fence in the stored
+  file and a card in the document → reload → panel search, edit, delete and
+  Undo. Plus the narrow-screen sheet, and a note with an equation and a
+  Mermaid diagram drawn from the cache.
 - `tests/notes-rendering.test.ts` (8 cases): the idle typesetter (nothing
   outside idle time, deadline respected, guaranteed progress on timeout, one
   job per equation, KaTeX downloaded first), `renderMathIdle` never spending

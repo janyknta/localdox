@@ -3,16 +3,22 @@ import ReactMarkdown from "react-markdown";
 import {
   Check,
   Copy,
+  Download,
+  FileInput,
   FileText,
+  LayoutGrid,
+  Maximize2,
   NotebookPen,
   Pencil,
-  PencilRuler,
   Search,
   Trash2,
   X,
 } from "lucide-react";
-import { notebookEntries, searchHighlights, searchNotes, type Note } from "@/lib/workspace/notes";
-import type { Highlight } from "@/lib/markdown/dom-highlighter";
+import { searchEntries, type NotebookEntry } from "@/lib/workspace/notes";
+import { notesToMarkdown } from "@/lib/workspace/notes-markdown";
+import { Modal } from "@/components/ui/modal";
+import { colorHex } from "@/lib/markdown/annotations";
+import { visibleInline } from "@/lib/search/rows";
 import { copyText } from "@/lib/workspace/share";
 import {
   cancelIdleCallbackSafe,
@@ -24,30 +30,31 @@ import { NOTE_COMPONENTS, NOTE_PLUGINS } from "./note-components";
 import { NoteRenderContext, type NoteRenderSettings } from "./note-render-context";
 import { RoughWorkPanel, type RoughWorkProps } from "./RoughWorkPanel";
 import { ComputePanel, type ComputeProps } from "./ComputePanel";
+import { NotesFileView } from "./NotesFileView";
 
-/** Whether a note's source document can still be opened. */
+/** Whether a scratchpad's linked document can still be opened. */
 export type NoteSourceState = "live" | "binned" | "missing";
 
 export type NotesTab = "notes" | "rough" | "compute";
 
 export interface NotesPanelProps {
-  /** Newest first. */
-  notes: Note[];
-  /** The source document's current name, or undefined once it is gone. */
-  fileName: (fileId: string) => string | undefined;
-  sourceState: (fileId: string) => NoteSourceState;
-  onOpenSource: (note: Note) => void;
-  onUpdate: (id: string, content: string) => void;
-  onRemove: (id: string) => void;
   /**
-   * The reader's highlights, listed among the notes: they are kept passages
-   * too. Shown as plain text with a dot of their colour, not painted.
+   * Every note and highlight kept in the workspace's documents, by document
+   * then by place (lib/workspace/notes.ts). Highlights are shown as plain text
+   * with a dot of their colour, not painted.
    */
-  highlights: Highlight[];
-  /** The title of the page a highlight is on, when it has one worth showing. */
-  highlightSection: (highlight: Highlight) => string | undefined;
-  onOpenHighlight: (highlight: Highlight) => void;
-  onRemoveHighlight: (id: string) => void;
+  entries: NotebookEntry[];
+  /** The document's current name. */
+  fileName: (fileId: string) => string | undefined;
+  /** The title of the page an entry is on, when it has one worth showing. */
+  entrySection: (entry: NotebookEntry) => string | undefined;
+  /** Open the document on the note, or on the passage a highlight marks. */
+  onOpen: (entry: NotebookEntry) => void;
+  /** Rewrite a note's Markdown, in its document. */
+  onUpdate: (entry: NotebookEntry, body: string) => void;
+  /** Take it out of its document. */
+  onRemove: (entry: NotebookEntry) => void;
+  onMoveToRoughWork: (entry: NotebookEntry) => void;
   onClose: () => void;
   /** A note just added: scrolled to and marked briefly. */
   freshId?: string | null;
@@ -67,25 +74,21 @@ export interface NotesPanelProps {
 }
 
 /**
- * The Notes panel: passages the reader copied out of documents, kept as
- * Markdown, searchable, editable, and each with a link back to where it came
- * from (see lib/workspace/notes.ts for the model). Highlights are listed with
- * them, newest first, as the other way a reader keeps a passage.
+ * The Notes panel: the notes and highlights kept in the workspace's documents,
+ * searchable, editable, and each a link back to its place. Nothing is stored
+ * here: every action rewrites the document that holds the note.
  *
  * It is a reading companion rather than a page, so it stays open beside the
  * document as the reader moves between documents.
  */
 export function NotesPanel({
-  notes,
+  entries,
   fileName,
-  sourceState,
-  onOpenSource,
+  entrySection,
+  onOpen,
   onUpdate,
   onRemove,
-  highlights,
-  highlightSection,
-  onOpenHighlight,
-  onRemoveHighlight,
+  onMoveToRoughWork,
   onClose,
   freshId,
   variant,
@@ -96,6 +99,8 @@ export function NotesPanel({
   compute,
 }: NotesPanelProps) {
   const [query, setQuery] = useState("");
+  const [view, setView] = useState<"cards" | "file">("cards");
+  const [previewOpen, setPreviewOpen] = useState(false);
   // The notes themselves are first rendered in an idle period of their own.
   // When the panel is open across a reload it mounts alongside the document,
   // and parsing its notes in the same task added a ~45 ms frame to the
@@ -105,19 +110,57 @@ export function NotesPanel({
     const handle = requestIdleCallbackSafe(() => setReady(true), 500);
     return () => cancelIdleCallbackSafe(handle);
   }, []);
-  const total = notes.length + highlights.length;
+  const total = entries.length;
   const visible = useMemo(
-    () =>
-      notebookEntries(
-        searchNotes(notes, query, fileName),
-        searchHighlights(highlights, query, fileName, highlightSection),
-      ),
-    [notes, highlights, query, fileName, highlightSection],
+    () => searchEntries(entries, query, fileName, entrySection),
+    [entries, query, fileName, entrySection],
   );
-  // A note saved from rough work links back to its pad, by the pad's current title.
-  const padTitles = useMemo(
-    () => new Map(roughWork.scratchpads.map((pad) => [pad.id, pad.title])),
-    [roughWork.scratchpads],
+  // Build only when the file is requested; card search never limits the export.
+  const mergedMarkdown = useMemo(
+    () => (view === "file" || previewOpen ? notesToMarkdown(entries) : ""),
+    [view, previewOpen, entries],
+  );
+  const download = () => {
+    const markdown = mergedMarkdown || notesToMarkdown(entries);
+    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "notes.md";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const viewControls = total > 0 && (
+    <div className={`flex items-center gap-1 pb-3 ${variant === "sheet" ? "pt-3" : "px-3"}`}>
+      <div
+        role="group"
+        aria-label="Notes view"
+        className="mr-auto inline-flex rounded-md bg-muted p-0.5"
+      >
+        {(["cards", "file"] as const).map((mode) => {
+          const Icon = mode === "cards" ? LayoutGrid : FileText;
+          return (
+            <button
+              key={mode}
+              aria-pressed={view === mode}
+              onClick={() => setView(mode)}
+              className={`inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring coarse:min-h-10 ${view === mode ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <Icon className="h-3.5 w-3.5" aria-hidden />
+              {mode === "cards" ? "Cards" : "File"}
+            </button>
+          );
+        })}
+      </div>
+      <NoteAction label="Preview all notes" onClick={() => setPreviewOpen(true)}>
+        <Maximize2 className="h-3.5 w-3.5" />
+      </NoteAction>
+      <NoteAction label="Download all notes as Markdown" onClick={download}>
+        <Download className="h-3.5 w-3.5" />
+      </NoteAction>
+    </div>
   );
 
   const search = total > 0 && (
@@ -150,7 +193,7 @@ export function NotesPanel({
       <p className="mt-1.5 max-w-64 text-xs leading-relaxed text-muted-foreground">
         Select text in a document and choose{" "}
         <span className="font-medium text-foreground">Copy selection to notes</span>, or highlight
-        it. A note is a copy — editing the document never changes it.
+        it. Notes are saved in the document itself, so they go wherever the file goes.
       </p>
     </div>
   ) : visible.length === 0 ? (
@@ -160,42 +203,30 @@ export function NotesPanel({
   ) : (
     <ul className={`space-y-2 ${variant === "docked" ? "px-3 pb-6" : "pb-2"}`} aria-label="Notes">
       {visible.map((entry) => {
-        if (entry.kind === "highlight") {
-          const { highlight } = entry;
+        const name = fileName(entry.fileId) ?? "Unknown document";
+        if (entry.kind === "highlight")
           return (
             <HighlightCard
-              key={highlight.id}
-              highlight={highlight}
-              name={fileName(highlight.fileId) ?? "Unknown document"}
-              section={highlightSection(highlight)}
-              state={sourceState(highlight.fileId)}
-              onOpen={onOpenHighlight}
-              onRemove={onRemoveHighlight}
+              key={entry.id}
+              highlight={entry}
+              name={name}
+              section={entrySection(entry)}
+              onOpen={onOpen}
+              onRemove={onRemove}
+              onMoveToRoughWork={onMoveToRoughWork}
             />
           );
-        }
-        const { note } = entry;
         return (
           <NoteCard
-            key={note.id}
-            note={note}
-            name={
-              note.origin
-                ? (padTitles.get(note.origin.scratchpadId) ?? note.origin.title)
-                : (fileName(note.fileId) ?? note.fileName)
-            }
-            state={
-              note.origin
-                ? padTitles.has(note.origin.scratchpadId)
-                  ? "live"
-                  : "missing"
-                : sourceState(note.fileId)
-            }
-            fresh={note.id === freshId}
+            key={entry.id}
+            note={entry}
+            name={name}
+            fresh={entry.id === freshId}
             mathRenderer={mathRenderer}
-            onOpenSource={onOpenSource}
+            onOpen={onOpen}
             onUpdate={onUpdate}
             onRemove={onRemove}
+            onMoveToRoughWork={onMoveToRoughWork}
           />
         );
       })}
@@ -203,6 +234,35 @@ export function NotesPanel({
   );
 
   const tabs = <PanelTabs tab={tab} onTabChange={onTabChange} noteCount={total} />;
+  const notesContent =
+    view === "file" && total > 0
+      ? ready && (
+          <div className={variant === "docked" ? "px-3 pb-6" : "pb-2"}>
+            <NotesFileView markdown={mergedMarkdown} mathRenderer={mathRenderer} />
+          </div>
+        )
+      : list;
+  const preview = (
+    <Modal
+      open={previewOpen}
+      onOpenChange={setPreviewOpen}
+      title="All notes"
+      description={`${total} ${total === 1 ? "entry" : "entries"} merged into notes.md`}
+      size="2xl"
+      bodyClassName="p-4 sm:p-6"
+      footer={
+        <button
+          onClick={download}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-foreground px-3 py-2 text-sm font-medium text-background hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Download className="h-4 w-4" aria-hidden />
+          Download Markdown
+        </button>
+      }
+    >
+      <NotesFileView markdown={mergedMarkdown} mathRenderer={mathRenderer} />
+    </Modal>
+  );
   const rough = ready && (
     <RoughWorkPanel {...roughWork} mathRenderer={mathRenderer} variant={variant} />
   );
@@ -222,9 +282,11 @@ export function NotesPanel({
       <div>
         <div className="sticky top-0 z-20 bg-background pb-3">
           {tabs}
-          {tab === "notes" && search}
+          {tab === "notes" && viewControls}
+          {tab === "notes" && view === "cards" && search}
         </div>
-        {panel(tab === "notes" ? list : other)}
+        {panel(tab === "notes" ? notesContent : other)}
+        {preview}
       </div>
     );
   }
@@ -232,8 +294,9 @@ export function NotesPanel({
   const body = panel(
     tab === "notes" ? (
       <>
-        {search}
-        {list}
+        {viewControls}
+        {view === "cards" && search}
+        {notesContent}
       </>
     ) : (
       other
@@ -255,6 +318,7 @@ export function NotesPanel({
         </button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
+      {preview}
     </section>
   );
 }
@@ -294,7 +358,7 @@ function PanelTabs({
       aria-controls={`notes-tabpanel-${id}`}
       tabIndex={tab === id ? 0 : -1}
       onClick={() => onTabChange(id)}
-      className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring coarse:h-10 coarse:px-3.5 coarse:text-sm ${
+      className={`relative inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring coarse:h-10 coarse:px-3.5 coarse:text-sm ${
         tab === id
           ? "bg-background text-foreground shadow-sm"
           : "text-muted-foreground hover:text-foreground"
@@ -302,6 +366,23 @@ function PanelTabs({
     >
       {label}
       {!!count && <span className="tabular-nums text-muted-foreground">{count}</span>}
+      {id === "notes" && tab === "notes" && noteCount > 0 && (
+        <svg
+          aria-hidden
+          width="12"
+          height="7"
+          viewBox="0 0 12 7"
+          className="pointer-events-none absolute left-1/2 top-full -mt-px -translate-x-1/2 overflow-visible"
+        >
+          <path
+            d="M0 0 L6 6 L12 0"
+            fill="var(--background)"
+            stroke="var(--border)"
+            strokeWidth="1"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
     </button>
   );
   return (
@@ -318,20 +399,23 @@ function PanelTabs({
   );
 }
 
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-const dateFormat = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short" });
-
-/** "just now", "5 minutes ago", "yesterday" — then a date. */
-function when(at: number, now = Date.now()): string {
-  const seconds = Math.round((at - now) / 1000);
-  if (Math.abs(seconds) < 45) return "just now";
-  const minutes = Math.round(seconds / 60);
-  if (Math.abs(minutes) < 60) return relative.format(minutes, "minute");
-  const hours = Math.round(minutes / 60);
-  if (Math.abs(hours) < 24) return relative.format(hours, "hour");
-  const days = Math.round(hours / 24);
-  if (Math.abs(days) < 7) return relative.format(days, "day");
-  return dateFormat.format(at);
+/** Card clicks open the source, while controls, links and text selection stay independent. */
+function shouldOpenCard(event: React.MouseEvent<HTMLLIElement>): boolean {
+  if (event.defaultPrevented) return false;
+  if (
+    event.target instanceof Element &&
+    event.target.closest(
+      "button, a, input, textarea, select, summary, [role='button'], [role='link'], [contenteditable='true']",
+    )
+  )
+    return false;
+  const selection = window.getSelection();
+  return !(
+    selection &&
+    !selection.isCollapsed &&
+    (event.currentTarget.contains(selection.anchorNode) ||
+      event.currentTarget.contains(selection.focusNode))
+  );
 }
 
 /** Taller than this and a note folds, so one long passage can't bury the rest. */
@@ -345,21 +429,21 @@ const FOLDED_HEIGHT = 288;
 const NoteCard = memo(function NoteCard({
   note,
   name,
-  state,
   fresh,
   mathRenderer,
-  onOpenSource,
+  onOpen,
   onUpdate,
   onRemove,
+  onMoveToRoughWork,
 }: {
-  note: Note;
+  note: NotebookEntry;
   name: string;
-  state: NoteSourceState;
   fresh: boolean;
   mathRenderer: MathRendererType;
-  onOpenSource: (note: Note) => void;
-  onUpdate: (id: string, content: string) => void;
-  onRemove: (id: string) => void;
+  onOpen: (entry: NotebookEntry) => void;
+  onUpdate: (entry: NotebookEntry, body: string) => void;
+  onRemove: (entry: NotebookEntry) => void;
+  onMoveToRoughWork: (entry: NotebookEntry) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -410,7 +494,7 @@ const NoteCard = memo(function NoteCard({
     const observer = new ResizeObserver(measure);
     for (const child of body.children) observer.observe(child);
     return () => observer.disconnect();
-  }, [note.content, draft]);
+  }, [note.body, draft]);
 
   useEffect(() => {
     if (draft === null) return;
@@ -422,53 +506,35 @@ const NoteCard = memo(function NoteCard({
 
   const editing = draft !== null;
   const startEditing = () => {
-    setDraft(note.content);
+    setDraft(note.body);
     requestAnimationFrame(() => fieldRef.current?.focus());
   };
   const save = () => {
     if (draft === null || !draft.trim()) return;
-    onUpdate(note.id, draft);
+    onUpdate(note, draft);
     setDraft(null);
   };
 
-  const source = note.origin
-    ? `Rough work › ${name}`
-    : note.source.sectionTitle
-      ? `${name} › ${note.source.sectionTitle}`
-      : name;
-  const sourceHint = note.origin
-    ? state === "live"
-      ? `Open the scratchpad “${name}”`
-      : "The scratchpad was deleted; this note keeps its own copy"
-    : state === "missing"
-      ? "The source document is no longer in this workspace"
-      : state === "binned"
-        ? "The source document is in the Bin"
-        : `Go to this passage in ${name}`;
-  const SourceIcon = note.origin ? PencilRuler : FileText;
+  const sourceHint = `Go to this note in ${name}`;
 
   return (
     <li
       ref={cardRef}
-      className={`group rounded-lg border bg-card p-3 transition-shadow ${
+      onClick={(event) => {
+        if (!editing && shouldOpenCard(event)) onOpen(note);
+      }}
+      className={`group rounded-lg border bg-card p-3 transition-shadow has-[>button:focus-visible]:ring-2 has-[>button:focus-visible]:ring-ring ${editing ? "" : "cursor-pointer hover:border-primary/30"} ${
         fresh ? "border-primary/50 ring-2 ring-primary/25" : "border-border/70"
       }`}
     >
-      <button
-        onClick={() => onOpenSource(note)}
-        title={sourceHint}
-        className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded text-left text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <SourceIcon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className={`truncate ${state === "live" ? "" : "line-through decoration-1"}`}>
-          {source}
-        </span>
-        {state !== "live" && (
-          <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium">
-            {state === "binned" ? "In Bin" : "Deleted"}
-          </span>
-        )}
-      </button>
+      {!editing && (
+        <button
+          type="button"
+          onClick={() => onOpen(note)}
+          aria-label={sourceHint}
+          className="sr-only"
+        />
+      )}
 
       {editing ? (
         <div>
@@ -515,7 +581,7 @@ const NoteCard = memo(function NoteCard({
           >
             <NoteRenderContext.Provider value={render}>
               <ReactMarkdown remarkPlugins={NOTE_PLUGINS} components={NOTE_COMPONENTS}>
-                {note.content}
+                {note.body}
               </ReactMarkdown>
             </NoteRenderContext.Provider>
             {!expanded && overflows && (
@@ -537,19 +603,11 @@ const NoteCard = memo(function NoteCard({
       )}
 
       {!editing && (
-        <div className="mt-2 flex items-center gap-0.5">
-          <span
-            className="mr-auto text-2xs text-muted-foreground"
-            title={new Date(note.updatedAt).toLocaleString()}
-          >
-            {note.updatedAt > note.createdAt
-              ? `Edited ${when(note.updatedAt)}`
-              : when(note.createdAt)}
-          </span>
+        <div className="mt-2 flex items-center justify-end gap-0.5">
           <NoteAction
             label={copied ? "Copied" : "Copy note"}
             onClick={() => {
-              void copyText(note.content).then((ok) => {
+              void copyText(note.body).then((ok) => {
                 if (!ok) return;
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
@@ -558,10 +616,13 @@ const NoteCard = memo(function NoteCard({
           >
             {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           </NoteAction>
+          <NoteAction label="Move to rough work" onClick={() => onMoveToRoughWork(note)}>
+            <FileInput className="h-3.5 w-3.5" />
+          </NoteAction>
           <NoteAction label="Edit note" onClick={startEditing}>
             <Pencil className="h-3.5 w-3.5" />
           </NoteAction>
-          <NoteAction label="Delete note" onClick={() => onRemove(note.id)} destructive>
+          <NoteAction label="Delete note" onClick={() => onRemove(note)} destructive>
             <Trash2 className="h-3.5 w-3.5" />
           </NoteAction>
         </div>
@@ -573,82 +634,71 @@ const NoteCard = memo(function NoteCard({
 /**
  * A highlight, shown the way a note is rather than painted in its colour: a
  * list of yellow and pink blocks is hard to read, and the colour only has to
- * say "this one is a highlight". A small dot where a note shows its document
- * icon does that. The text is the document's own, so there is nothing to
- * edit here — the source link opens the passage, where it can be recoloured.
+ * say "this one is a highlight". A small dot beside the actions does that.
+ * The text is the document's own, so there is nothing to edit here — clicking
+ * the card opens the passage, where it can be recoloured.
  */
 const HighlightCard = memo(function HighlightCard({
   highlight,
   name,
   section,
-  state,
   onOpen,
   onRemove,
+  onMoveToRoughWork,
 }: {
-  highlight: Highlight;
+  highlight: NotebookEntry;
   name: string;
   section: string | undefined;
-  state: NoteSourceState;
-  onOpen: (highlight: Highlight) => void;
-  onRemove: (id: string) => void;
+  onOpen: (entry: NotebookEntry) => void;
+  onRemove: (entry: NotebookEntry) => void;
+  onMoveToRoughWork: (entry: NotebookEntry) => void;
 }) {
   const [copied, setCopied] = useState(false);
   const source = section ? `${name} › ${section}` : name;
-  const hint =
-    state === "binned"
-      ? "The source document is in the Bin"
-      : state === "missing"
-        ? "The source document is no longer in this workspace"
-        : `Go to this highlight in ${name}`;
+  const hint = `Go to this highlight in ${source}`;
+  // Its body is the passage's Markdown source; the card shows what it reads as.
+  const text = useMemo(
+    () => highlight.body.split("\n").map(visibleInline).join("\n"),
+    [highlight.body],
+  );
 
   return (
-    <li className="group rounded-lg border border-border/70 bg-card p-3">
+    <li
+      onClick={(event) => {
+        if (shouldOpenCard(event)) onOpen(highlight);
+      }}
+      className="group cursor-pointer rounded-lg border border-border/70 bg-card p-3 transition-colors hover:border-primary/30 has-[>button:focus-visible]:ring-2 has-[>button:focus-visible]:ring-ring"
+    >
       <button
+        type="button"
         onClick={() => onOpen(highlight)}
-        title={hint}
-        className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded text-left text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {/* Sized to the icon slot a note's source link has, so the rows align. */}
-        <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden>
-          <span
-            data-highlight-dot
-            className="h-2 w-2 rounded-full ring-1 ring-foreground/10"
-            style={{ backgroundColor: highlight.color }}
-          />
-        </span>
-        <span className="sr-only">Highlight in</span>
-        <span className={`truncate ${state === "live" ? "" : "line-through decoration-1"}`}>
-          {source}
-        </span>
-        {state !== "live" && (
-          <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-2xs font-medium">
-            {state === "binned" ? "In Bin" : "Deleted"}
-          </span>
-        )}
-      </button>
+        aria-label={hint}
+        className="sr-only"
+      />
 
       <div className="docs-note">
-        <p className="line-clamp-6 whitespace-pre-line">{highlight.text}</p>
+        <p className="line-clamp-6 whitespace-pre-line">{text}</p>
       </div>
+      {!highlight.target && (
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          This passage is no longer in the document.
+        </p>
+      )}
       {highlight.label && (
         <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{highlight.label}</p>
       )}
 
-      <div className="mt-2 flex items-center gap-0.5">
+      <div className="mt-2 flex items-center justify-end gap-0.5">
         <span
-          className="mr-auto text-2xs text-muted-foreground"
-          title={
-            highlight.createdAt !== undefined
-              ? new Date(highlight.createdAt).toLocaleString()
-              : undefined
-          }
-        >
-          {highlight.createdAt !== undefined ? when(highlight.createdAt) : ""}
-        </span>
+          data-highlight-dot
+          aria-hidden
+          className="mr-auto h-2 w-2 rounded-full ring-1 ring-foreground/10"
+          style={{ backgroundColor: colorHex(highlight.color) }}
+        />
         <NoteAction
           label={copied ? "Copied" : "Copy highlight"}
           onClick={() => {
-            void copyText(highlight.text).then((ok) => {
+            void copyText(text).then((ok) => {
               if (!ok) return;
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
@@ -657,7 +707,10 @@ const HighlightCard = memo(function HighlightCard({
         >
           {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
         </NoteAction>
-        <NoteAction label="Delete highlight" onClick={() => onRemove(highlight.id)} destructive>
+        <NoteAction label="Move to rough work" onClick={() => onMoveToRoughWork(highlight)}>
+          <FileInput className="h-3.5 w-3.5" />
+        </NoteAction>
+        <NoteAction label="Delete highlight" onClick={() => onRemove(highlight)} destructive>
           <Trash2 className="h-3.5 w-3.5" />
         </NoteAction>
       </div>

@@ -20,6 +20,36 @@ const settings = (page: Page) => page.getByRole("dialog", { name: "Settings", ex
 const prefs = (page: Page) =>
   page.evaluate(() => JSON.parse(localStorage.getItem("localdox:prefs") ?? "{}"));
 
+test("shared dropdown supports keyboard selection and restores focus on Escape", async ({
+  page,
+}) => {
+  await page.goto("/settings");
+  const dialog = settings(page);
+  await dialog.getByRole("tab", { name: "Equations", exact: true }).click();
+  const dropdown = dialog.getByRole("combobox", { name: "Typesetting", exact: true });
+  await dropdown.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: "Automatic (recommended)", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(
+    page.getByRole("option", { name: "MathML (accessibility)", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dropdown).toHaveText("MathML (accessibility)");
+  await expect(dropdown).toBeFocused();
+  await expect.poll(() => prefs(page)).toMatchObject({ mathRenderer: "temml" });
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toBeHidden();
+  await expect(dialog).toBeVisible();
+  await expect(dropdown).toBeFocused();
+  await expect(dialog.locator("select:visible")).toHaveCount(0);
+});
+
 test("keyboard navigation keeps focus in Settings and dismissal restores the opener", async ({
   page,
 }) => {
@@ -65,7 +95,8 @@ test("theme, reading, equation, and diagram choices persist through reopening", 
   await dialog.getByRole("button", { name: /Single page/ }).click();
   await dialog.getByRole("slider", { name: "Content width", exact: true }).fill("70");
   await dialog.getByRole("tab", { name: "Equations", exact: true }).click();
-  await dialog.getByLabel("Typesetting", { exact: true }).selectOption("temml");
+  await dialog.getByLabel("Typesetting", { exact: true }).click();
+  await page.getByRole("option", { name: "MathML (accessibility)", exact: true }).click();
   await dialog.getByRole("tab", { name: "Diagrams", exact: true }).click();
   await dialog
     .getByRole("switch", { name: "Show step numbers on arrows in Stepped diagrams" })
@@ -80,6 +111,8 @@ test("theme, reading, equation, and diagram choices persist through reopening", 
       diagramNumbers: false,
     });
   await page.reload();
+  await expect(page).toHaveURL(/\/settings\/diagrams$/);
+  await settings(page).getByRole("tab", { name: "Appearance", exact: true }).click();
   await expect(settings(page).getByRole("button", { name: "Dark", exact: true })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -155,6 +188,7 @@ for (const width of [320, 390, 768, 1440]) {
       "Ask AI",
       "Workspace",
       "Exam rules",
+      "Practice",
       "Storage",
     ]) {
       await dialog.getByRole("tab", { name, exact: true }).click();
@@ -209,7 +243,8 @@ test("rulesets expose primary and nested advanced controls and reject invalid va
     .check();
   await dialog
     .getByRole("combobox", { name: "Full exam rules · Tools · Calculator", exact: true })
-    .selectOption("scientific");
+    .click();
+  await page.getByRole("option", { name: "Scientific", exact: true }).click();
   await dialog.getByRole("button", { name: "JSON", exact: true }).click();
   const json = JSON.parse(
     await dialog.getByRole("textbox", { name: "Edit Custom quiz.xrule", exact: true }).inputValue(),

@@ -1,4 +1,5 @@
 import GithubSlugger from "github-slugger";
+import { annotationInfo } from "../markdown/annotations.ts";
 
 // Splits a markdown file into the rows search matches against: one per source
 // line, holding the text a reader actually sees on that line. Kept free of
@@ -95,16 +96,39 @@ export function parseRows(content: string): SearchRow[] {
   const rows: SearchRow[] = [];
   const slugger = new GithubSlugger();
   let heading: { id: string; text: string } | undefined;
-  let fence: { marker: string; length: number; rendered: boolean } | undefined;
+  let fence: { marker: string; length: number; rendered: boolean; skip?: boolean } | undefined;
+  // An open note (annotations.ts): its body is Markdown, read like any other.
+  let note: { marker: string; length: number } | undefined;
   const lines = content.split("\n");
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex].replace(/\r$/, "");
     const fenceMatch = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fenceMatch) {
       const marker = fenceMatch[1][0];
+      if (
+        note &&
+        !fence &&
+        marker === note.marker &&
+        fenceMatch[1].length >= note.length &&
+        !fenceMatch[2].trim()
+      ) {
+        note = undefined;
+        continue;
+      }
       if (!fence) {
+        const annotation = !note && line.startsWith(fenceMatch[1]) && annotationInfo(fenceMatch[2]);
+        if (annotation && annotation.kind === "note") {
+          note = { marker, length: fenceMatch[1].length };
+          continue;
+        }
         const lang = fenceMatch[2].trim().split(/\s+/)[0]?.toLowerCase() ?? "";
-        fence = { marker, length: fenceMatch[1].length, rendered: !DRAWN_FENCES.has(lang) };
+        fence = {
+          marker,
+          length: fenceMatch[1].length,
+          rendered: !DRAWN_FENCES.has(lang),
+          // A highlight repeats the passage it marks, which is indexed already.
+          skip: !!annotation,
+        };
         continue;
       }
       if (
@@ -123,7 +147,7 @@ export function parseRows(content: string): SearchRow[] {
     };
     if (fence) {
       // Code renders verbatim, so it is searched verbatim.
-      if (line.trim())
+      if (line.trim() && !fence.skip)
         rows.push({ ...base, text: line, isHeading: false, rendered: fence.rendered });
       continue;
     }

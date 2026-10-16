@@ -18,6 +18,9 @@ import { TaskContext, SegmentLineContext } from "./contexts";
 import { HeadingLink } from "./HeadingLink";
 import { CodeBlock } from "./CodeBlock";
 import { Callout } from "./Callout";
+import { ConnectedLink } from "./ConnectedLink";
+import { isNoteUrl, noteReference, resolveNoteLink } from "@/lib/markdown/note-links";
+import { WorkspaceLinksContext } from "../../workspace/WorkspaceLinksContext";
 
 // The viewer's markdown renderers, assembled into react-markdown's
 // `components` map by `markdown-components.ts`. Props are passed through
@@ -121,7 +124,14 @@ export function MarkdownImage(props: Props<"img"> & { "data-media"?: string }) {
 
 export function MarkdownLink(props: Props<"a">) {
   const { file, media, anchorTargets, onNav, contentRef } = useRenderContext();
+  const workspace = useContext(WorkspaceLinksContext);
   const href = typeof props.href === "string" ? props.href : "";
+  if (isNoteUrl(href)) return <ConnectedLink reference={noteReference(href)} sourceId={file.id}>{props.children}</ConnectedLink>;
+  if (workspace && isLocalReference(href) && !isArtifactUrl(href)) {
+    const reference = decodeURIComponentSafe(href);
+    const resolved = resolveNoteLink(reference, file, workspace.files, workspace.folders);
+    if (resolved.status !== "missing" || /\.(md|markdown|mdx|txt)(?:#|$)/i.test(reference)) return <ConnectedLink reference={reference} sourceId={file.id}>{props.children}</ConnectedLink>;
+  }
   if (isArtifactUrl(href) || isLocalReference(href))
     return (
       <MarkdownMedia src={href} linkOnly context={media}>
@@ -176,6 +186,10 @@ export function MarkdownLink(props: Props<"a">) {
       {props.children}
     </a>
   );
+}
+
+function decodeURIComponentSafe(value: string) {
+  try { return decodeURIComponent(value); } catch { return value; }
 }
 
 export function MarkdownTable(props: Props<"table">) {

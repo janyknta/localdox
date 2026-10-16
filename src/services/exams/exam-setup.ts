@@ -17,6 +17,7 @@ import {
 import { parseExamFile, type Question, type Solution } from "./parser.ts";
 import { importSolutions, validateExam, validateSolutions } from "./validation.ts";
 import type { ExamRecord } from "./storage.ts";
+import { enforceStrictExamRules } from "./strict-rules.ts";
 import { humanizeId } from "./ui/display.ts";
 
 export const examSetupSchema = z
@@ -85,14 +86,16 @@ export function buildRuleset(setup: ExamSetup, id: string, paper: Question[]): R
           name: root.sections.find((s) => s.id === id)?.name ?? humanizeId(id),
           questionCount: paper.filter((q) => q.section === id).length,
         }));
-    return rulesetSchema.parse({
-      ...root,
-      meta: { ...root.meta, id, name: setup.name },
-      sections,
-      timing: { ...root.timing, durationMinutes: setup.durationMinutes },
-      attempts: { ...root.attempts, max: setup.maxAttempts },
-      progression: { ...root.progression, passPercentage: setup.passPercentage },
-    });
+    return enforceStrictExamRules(
+      rulesetSchema.parse({
+        ...root,
+        meta: { ...root.meta, id, name: setup.name },
+        sections,
+        timing: { ...root.timing, durationMinutes: setup.durationMinutes },
+        attempts: { ...root.attempts, max: setup.maxAttempts },
+        progression: { ...root.progression, passPercentage: setup.passPercentage },
+      }),
+    );
   }
   const sections = [...new Set(paper.map((q) => q.section))];
   for (const q of paper)
@@ -123,7 +126,7 @@ export function buildRuleset(setup: ExamSetup, id: string, paper: Question[]): R
   // JSON. A learner's own file may vary per question; validation still keeps
   // every question between 2 and 26 options.
   delete (rules.questionTypes.mcq as { optionCount?: number }).optionCount;
-  return rules;
+  return enforceStrictExamRules(rules);
 }
 
 /**

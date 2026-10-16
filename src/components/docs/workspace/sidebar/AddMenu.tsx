@@ -3,6 +3,7 @@ import {
   FilePlus,
   FileCheck,
   FileQuestion,
+  FileCog,
   FolderPlus,
   PenTool,
   Plus,
@@ -22,6 +23,7 @@ export function AddMenu({
   onCreateBoard,
   onCreateFolder,
   onCreateExam,
+  onCreateRules,
   onCreatePractice,
   onUpload,
   align = "right",
@@ -34,6 +36,7 @@ export function AddMenu({
   onCreateFolder?: () => void;
   /** Opens the New exam dialog, where the paper is tagged with a ruleset. */
   onCreateExam?: () => void;
+  onCreateRules?: () => void;
   /** A new `.xp` practice file: questions checked as they are answered. */
   onCreatePractice?: () => void;
   onUpload: () => void;
@@ -51,6 +54,7 @@ export function AddMenu({
     // and the file it makes are recognisably one thing.
     onCreateExam && { label: "Exam", icon: FileQuestion, run: onCreateExam },
     onCreatePractice && { label: "Practice", icon: FileCheck, run: onCreatePractice },
+    onCreateRules && { label: "Ruleset", icon: FileCog, run: onCreateRules },
   ].filter((item): item is { label: string; icon: LucideIcon; run: () => void } => !!item);
 
   useEffect(() => {

@@ -1,5 +1,11 @@
-import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from "react";
-import { EditorState } from "@codemirror/state";
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useEffect, useContext } from "react";
+import { EditorState, Compartment, Transaction } from "@codemirror/state";
+import { autocompletion } from "@codemirror/autocomplete";
+import { noteCompletion } from "./note-completion";
+import { livePreview, refreshLivePreview } from "./markdown-live-preview";
+import { WorkspaceLinksContext } from "../workspace/WorkspaceLinksContext";
+import type { MediaContext } from "@/lib/markdown/media-context";
+import type { MathPreferences } from "@/services/math/types";
 import { EditorView, keymap, lineNumbers, drawSelection } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
 import {
@@ -21,6 +27,7 @@ export interface MarkdownSourceHandle {
   select: (start: number, end: number) => void;
   format: (action: FormatAction) => void;
   focus: () => void;
+  replace: (text: string) => void;
 }
 
 const colors = HighlightStyle.define([
@@ -71,11 +78,16 @@ const theme = EditorView.theme({
 /** Owns the editable document; React receives changes for journaling and autosave. */
 export const MarkdownSource = forwardRef<
   MarkdownSourceHandle,
-  { initialContent: string; onChange: (text: string) => void }
->(function MarkdownSource({ initialContent, onChange }, ref) {
+  { initialContent: string; onChange: (text: string) => void; mode?: "source" | "live"; mediaContext?: MediaContext; mathPreferences?: MathPreferences }
+>(function MarkdownSource({ initialContent, onChange, mode = "source", mediaContext, mathPreferences }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const initial = useRef(initialContent);
+  const modeCompartment = useRef(new Compartment());
+  const workspace = useContext(WorkspaceLinksContext);
+  const context = useRef({ media: mediaContext, workspace, preferences: mathPreferences });
+  context.current = { media: mediaContext, workspace, preferences: mathPreferences };
+  const modeExtensions = () => mode === "live" ? livePreview(() => context.current) : [lineNumbers(), foldGutter()];
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -91,8 +103,9 @@ export const MarkdownSource = forwardRef<
           syntaxHighlighting(colors),
           history(),
           drawSelection(),
-          lineNumbers(),
-          foldGutter(),
+          modeCompartment.current.of(modeExtensions()),
+          autocompletion(),
+          markdownLanguage.data.of({ autocomplete: noteCompletion(() => context.current.media) }),
           keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({
@@ -114,6 +127,17 @@ export const MarkdownSource = forwardRef<
       view.destroy();
     };
   }, []);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const anchor = view.state.selection.main.anchor;
+    view.dispatch({ effects: modeCompartment.current.reconfigure(modeExtensions()), selection: view.state.selection });
+    view.dispatch({ effects: EditorView.scrollIntoView(anchor, { y: "nearest" }) });
+  }, [mode]);
+  useEffect(() => {
+    if (mode === "live") viewRef.current?.dispatch({ effects: refreshLivePreview.of(null) });
+  }, [workspace, mathPreferences, mode]);
 
   useImperativeHandle(
     ref,
@@ -165,6 +189,15 @@ export const MarkdownSource = forwardRef<
         view.focus();
       },
       focus: () => viewRef.current?.focus(),
+      replace: (text) => {
+        const view = viewRef.current;
+        if (!view || view.state.doc.toString() === text) return;
+        const previous = view.state.doc.toString();
+        let from = 0, to = previous.length, end = text.length;
+        while (from < to && from < end && previous[from] === text[from]) from++;
+        while (to > from && end > from && previous[to - 1] === text[end - 1]) { to--; end--; }
+        view.dispatch({ changes: { from, to, insert: text.slice(from, end) }, annotations: Transaction.addToHistory.of(false) });
+      },
     }),
     [],
   );

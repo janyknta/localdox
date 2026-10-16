@@ -36,6 +36,7 @@
 //    document order, so the earlier records exist by then.
 
 import GithubSlugger, { slug } from "github-slugger";
+import { isAnnotationFence } from "./annotations.ts";
 
 /** Below this size a document renders in one piece, exactly as before. */
 export const SEGMENT_MIN_DOCUMENT = 16_000;
@@ -160,7 +161,13 @@ export function splitMarkdownSegments(source: string): MarkdownSegments {
     // Is this line a safe place to start a new segment?
     if (i > cuts[cuts.length - 1]) {
       const heading = UNINDENTED_HEADING.test(line);
-      const blockStart = previousBlank && !blank && !/^\s/.test(line) && !LIST_ITEM.test(line);
+      // An annotation stays with the passage above it (annotations.ts).
+      const blockStart =
+        previousBlank &&
+        !blank &&
+        !/^\s/.test(line) &&
+        !LIST_ITEM.test(line) &&
+        !isAnnotationFence(line);
       if ((heading && size >= SEGMENT_TARGET) || ((heading || blockStart) && size >= SEGMENT_MAX)) {
         cuts.push(i);
         size = 0;

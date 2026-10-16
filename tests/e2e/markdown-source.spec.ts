@@ -44,17 +44,17 @@ test("source highlights Markdown and fenced code, folds nested sections, and wra
     .poll(async () => keyword.evaluate((el) => getComputedStyle(el).color))
     .not.toBe(await editor.evaluate((el) => getComputedStyle(el).color));
 
-  await editor.press("Control+Home");
+  await editor.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await editor.press("ArrowDown");
   await editor.press("ArrowDown");
-  await editor.press("Control+Shift+{");
+  await editor.press(process.platform === "darwin" ? "Meta+Alt+[" : "Control+Shift+[");
   await expect(editor.locator(".cm-foldPlaceholder")).toHaveCount(1);
   await expect(editor).not.toContainText("Nested body.");
   await expect(editor).toContainText("Keep this body visible.");
   await editor.locator(".cm-foldPlaceholder").click();
   await expect(editor).toContainText("Nested body.");
 
-  await editor.press("Control+End");
+  await editor.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   await editor.pressSequentially("A long paragraph ".repeat(20));
   await expect(editor).toHaveCSS("white-space", "break-spaces");
   expect(
@@ -70,16 +70,16 @@ test("formatting, undo, autosave and cancel retain the source editor's document"
 }) => {
   await openEditor(page, "# Source note\n\nOriginal.");
   const editor = page.locator("#markdown-source");
-  await editor.press("Control+End");
+  await editor.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   await editor.press("Enter");
   await editor.pressSequentially("formatme");
-  await editor.press("Control+Shift+ArrowLeft");
+  await editor.press(process.platform === "darwin" ? "Alt+Shift+ArrowLeft" : "Control+Shift+ArrowLeft");
   await page.getByRole("button", { name: "Bold", exact: true }).click();
   await expect(editor).toContainText("**formatme**");
-  await editor.press("Control+z");
+  await editor.press("ControlOrMeta+z");
   await expect(editor).not.toContainText("**formatme**");
   await expect(editor).toContainText("formatme");
-  await editor.press("Control+y");
+  await editor.press("ControlOrMeta+Shift+z");
   await expect(editor).toContainText("**formatme**");
   await editor.press("Control+s");
   await page.getByRole("button", { name: /Done.*Preview/ }).click();
@@ -88,7 +88,7 @@ test("formatting, undo, autosave and cancel retain the source editor's document"
   await expect(page.locator("article strong")).toHaveText("formatme");
   await page.getByRole("button", { name: "Options", exact: true }).first().click();
   await page.getByText("Edit", { exact: true }).click();
-  await editor.press("Control+End");
+  await editor.press(process.platform === "darwin" ? "Meta+ArrowDown" : "Control+End");
   await editor.pressSequentially(" discarded");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.locator("article")).not.toContainText("discarded");

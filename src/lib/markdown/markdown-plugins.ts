@@ -22,8 +22,11 @@
 import { useEffect, useMemo, useState } from "react";
 import remarkGfm from "remark-gfm";
 import { remarkTasks } from "./markdown-tasks";
+import { remarkAnnotations } from "./remark-annotations";
+import { parseAnnotations } from "./annotations";
 import remarkMath from "remark-math";
 import rehypeSlug from "rehype-slug";
+import { remarkNoteLinks } from "./remark-note-links";
 import {
   remarkEquationReferences,
   remarkInlineMathRefs,
@@ -46,7 +49,25 @@ export interface MarkdownNeeds {
 
 /** What a chunk of markdown source needs beyond the always-on plugins. */
 export function detectMarkdownNeeds(source: string): MarkdownNeeds {
-  return { code: CODE_RE.test(source), math: MATH_RE.test(source) };
+  return { code: hasCode(source), math: MATH_RE.test(source) };
+}
+
+/**
+ * Code outside annotation fences, which aren't code: a document whose only
+ * fences are notes and highlights needn't fetch highlight.js. A note's body
+ * can hold code of its own, so bodies are checked; fence lines are not.
+ */
+function hasCode(source: string): boolean {
+  if (!CODE_RE.test(source)) return false;
+  const annotations = parseAnnotations(source);
+  if (!annotations.length) return true;
+  let rest = "";
+  let cursor = 0;
+  for (const annotation of annotations) {
+    rest += `${source.slice(cursor, annotation.span.start)}\n${annotation.kind === "note" ? annotation.body : ""}\n`;
+    cursor = annotation.span.end;
+  }
+  return CODE_RE.test(rest + source.slice(cursor));
 }
 
 // Module-level caches: the import promise (so concurrent callers share one
@@ -78,6 +99,10 @@ function loadHighlight(): Promise<Plugin> {
 // buried inside an already-converted node.
 const BASE_REMARK = [
   remarkGfm,
+  // First of the transforms: a note's body becomes ordinary nodes that every
+  // pass after it (links, tasks, math) treats like the rest of the document.
+  remarkAnnotations,
+  remarkNoteLinks,
   remarkTasks,
   remarkMath,
   remarkInlineMathRefs,

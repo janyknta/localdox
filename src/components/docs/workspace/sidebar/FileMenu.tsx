@@ -8,6 +8,7 @@ import {
   MoreVertical,
   Pencil,
   Share2,
+  Settings2,
   SquarePen,
   Trash2,
   Upload,
@@ -34,6 +35,7 @@ export function FileMenu({
   onDownload,
   formats = ["original"],
   onShare,
+  onConfigure,
 }: {
   /** Show this document in a column of its own, beside what is being read. */
   onAddToSplit?: () => void;
@@ -74,6 +76,7 @@ export function FileMenu({
   onDownload?: (format: ExportFormat) => void;
   formats?: ExportFormat[];
   onShare?: () => void;
+  onConfigure?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   // Which flyout is open beside the menu, and the row it hangs off.
@@ -88,7 +91,6 @@ export function FileMenu({
     setSubmenu((sub) => (sub === which ? null : which));
   };
 
-  const canEdit = Boolean(onEdit);
   useEffect(() => {
     if (!open) {
       setSubmenu(null);
@@ -98,9 +100,6 @@ export function FileMenu({
 
   useEffect(() => {
     if (!open) return;
-    // An open menu with Edit in it is the moment to fetch the editor, so it is
-    // usually there by the time Edit is chosen.
-    if (canEdit) preloadMarkdownEditor();
     const onDown = (e: MouseEvent) => {
       if (isOutsideMenu(e.target as Node, rootRef.current)) setOpen(false);
     };
@@ -111,7 +110,7 @@ export function FileMenu({
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, canEdit]);
+  }, [open]);
 
   return (
     <div ref={rootRef} className="relative ml-0.5 flex shrink-0 items-center">
@@ -133,10 +132,22 @@ export function FileMenu({
       {open && (
         <MenuPanel>
           {/* Working on the document itself. */}
+          {onConfigure && (
+            <MenuItem
+              icon={Settings2}
+              label="Configure"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                onConfigure();
+              }}
+            />
+          )}
           {onEdit && (
             <MenuItem
               icon={SquarePen}
               label="Edit"
+              onIntent={preloadMarkdownEditor}
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen(false);

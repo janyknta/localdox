@@ -22,3 +22,7 @@ The source is the persisted state; there is no separate checkbox database.
 Each toggle replaces only the marker in the source string and uses the existing
 700 ms debounced workspace save. Parsing and rendering still scale with document
 size, including the existing progressive rendering path for long documents.
+
+Highlights and notes use the same approach one size up: they are fenced
+blocks in the source, rewritten one block at a time. See
+[annotations.md](annotations.md).

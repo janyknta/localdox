@@ -16,7 +16,12 @@ const HEADING = /^H([1-6])$/;
  * Folded blocks stay in the DOM with `hidden`, so text offsets (highlights,
  * saved passages) no longer shift when a section above them is folded.
  */
-export function applySectionFolds(container: HTMLElement, collapsed: ReadonlySet<string>) {
+export function applySectionFolds(
+  container: HTMLElement,
+  collapsed: ReadonlySet<string>,
+  /** When present, every section is folded except these explicitly opened ones. */
+  expanded?: ReadonlySet<string>,
+) {
   // Headings still open above the current block, outermost first.
   const open: Array<{ rank: number; id: string }> = [];
   for (const child of Array.from(container.children)) {
@@ -28,7 +33,9 @@ export function applySectionFolds(container: HTMLElement, collapsed: ReadonlySet
     }
     // A heading asks only about the headings above it, so a folded heading
     // stays visible along with the control that unfolds it.
-    const hidden = open.some((entry) => collapsed.has(entry.id));
+    const hidden = open.some((entry) =>
+      expanded ? !expanded.has(entry.id) : collapsed.has(entry.id),
+    );
     if (match) open.push({ rank: Number(match[1]), id: el.id });
     if (el.hidden !== hidden) el.hidden = hidden;
   }
@@ -43,14 +50,15 @@ export function useSectionFolds(
   containerRef: RefObject<HTMLElement | null>,
   collapsed: ReadonlySet<string>,
   renderKey: string,
+  expanded?: ReadonlySet<string>,
 ) {
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    applySectionFolds(container, collapsed);
-    if (!collapsed.size) return;
-    const observer = new MutationObserver(() => applySectionFolds(container, collapsed));
+    applySectionFolds(container, collapsed, expanded);
+    if (!collapsed.size && !expanded) return;
+    const observer = new MutationObserver(() => applySectionFolds(container, collapsed, expanded));
     observer.observe(container, { childList: true });
     return () => observer.disconnect();
-  }, [containerRef, collapsed, renderKey]);
+  }, [containerRef, collapsed, renderKey, expanded]);
 }

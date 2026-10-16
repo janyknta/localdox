@@ -1,16 +1,13 @@
 import type { DocumentUpdate } from "@/services/office-editing";
-import { lazy, useCallback, useMemo } from "react";
+import { lazy, useCallback } from "react";
 import { MarkdownViewer } from "./MarkdownViewerLazy";
 import { getDocumentKind } from "@/lib/markdown/document-utils";
-import type { Highlight } from "@/lib/markdown/dom-highlighter";
 import type { MdFile } from "@/lib/markdown/markdown-utils";
 import type { FolderRecord, ReadingMode } from "@/lib/workspace/persistence";
 import type { MathPreferences } from "@/services/math";
 import type { PassageTarget } from "@/lib/workspace/saved-items";
-import type { NoteDraft } from "@/lib/workspace/notes";
+import type { AnnotationEvent } from "@/lib/markdown/annotations";
 import type { PendingSearch } from "@/lib/search/schema";
-
-const EMPTY_HIGHLIGHTS: Highlight[] = [];
 
 // Keep non-markdown readers out of the initial reading bundle, just as the
 // single-document path does in DocsApp. The Suspense boundary around the main
@@ -28,14 +25,12 @@ const DocumentViewer = lazy(() =>
  * workspace-level collections to its own file here rather than the parent
  * building one set of props per pane.
  *
- * Deliberately thin: the viewer is unchanged, and everything panes add is
- * either a filter over a list or a partial application of a callback that
- * already takes a file id.
+ * Deliberately thin: the viewer is unchanged, and everything panes add is a
+ * partial application of a callback that already takes a file id.
  */
 export function PaneDocument({
   file,
   files,
-  highlights,
   workspaceId,
   workspaceRevision,
   workspaceName,
@@ -45,10 +40,6 @@ export function PaneDocument({
   onDocumentSave,
   onEditorDirtyChange,
   onRenameFile,
-  onAddHighlight,
-  onUpdateHighlight,
-  onRemoveHighlight,
-  onRepairHighlights,
   onOpenArtifact,
   readingMode,
   contentWidth,
@@ -61,13 +52,12 @@ export function PaneDocument({
   onSearchShown,
   pendingSaved = null,
   onSavedShown,
-  onCopyToNotes,
+  onAnnotated,
   onToggleNotes,
   notesOpen,
 }: {
   file: MdFile;
   files: MdFile[];
-  highlights: Highlight[];
   workspaceId: string | null;
   workspaceRevision: string;
   workspaceName: string;
@@ -77,10 +67,6 @@ export function PaneDocument({
   onDocumentSave?: (fileId: string, update: DocumentUpdate) => void;
   onEditorDirtyChange?: (dirty: boolean) => void;
   onRenameFile: (fileId: string, name: string) => void;
-  onAddHighlight: (hl: Omit<Highlight, "id" | "fileId">, fileId: string) => void;
-  onUpdateHighlight: (id: string, patch: Partial<Pick<Highlight, "color" | "label">>) => void;
-  onRemoveHighlight: (id: string) => void;
-  onRepairHighlights?: (patches: Array<{ id: string; patch: Partial<Highlight> }>) => void;
   onOpenArtifact?: (fileId: string, workspaceId: string) => void;
   readingMode: ReadingMode;
   contentWidth?: number;
@@ -105,26 +91,13 @@ export function PaneDocument({
   /** A note source to scroll to — gated by the parent like a search hit. */
   pendingSaved?: PassageTarget | null;
   onSavedShown?: () => void;
-  onCopyToNotes?: (fileId: string, draft: NoteDraft) => void;
+  onAnnotated?: (event: AnnotationEvent) => void;
   onToggleNotes?: () => void;
   notesOpen?: boolean;
 }) {
-  const fileHighlights = useMemo(() => {
-    const mine = highlights.filter((hl) => hl.fileId === file.id);
-    return mine.length > 0 ? mine : EMPTY_HIGHLIGHTS;
-  }, [highlights, file.id]);
-
-  const addHighlight = useCallback(
-    (hl: Omit<Highlight, "id" | "fileId">) => onAddHighlight(hl, file.id),
-    [onAddHighlight, file.id],
-  );
   const renameFile = useCallback(
     (name: string) => onRenameFile(file.id, name),
     [onRenameFile, file.id],
-  );
-  const copyToNotes = useCallback(
-    (draft: NoteDraft) => onCopyToNotes?.(file.id, draft),
-    [onCopyToNotes, file.id],
   );
 
   // A split is a layout concern, not a document-type mode. Resolve the viewer
@@ -168,7 +141,7 @@ export function PaneDocument({
       onSearchShown={onSearchShown}
       pendingSaved={pendingSaved}
       onSavedShown={onSavedShown}
-      onCopyToNotes={onCopyToNotes ? copyToNotes : undefined}
+      onAnnotated={onAnnotated}
       onToggleNotes={onToggleNotes}
       notesOpen={notesOpen}
       onContentChange={onContentChange}
@@ -176,11 +149,6 @@ export function PaneDocument({
       startInEditFileId={startInEditFileId}
       onStartInEditConsumed={onStartInEditConsumed}
       nextReadingMin={null}
-      highlights={fileHighlights}
-      onAddHighlight={addHighlight}
-      onUpdateHighlight={onUpdateHighlight}
-      onRemoveHighlight={onRemoveHighlight}
-      onRepairHighlights={onRepairHighlights}
       readingMode={readingMode}
       contentWidth={contentWidth}
       mathPreferences={mathPreferences}

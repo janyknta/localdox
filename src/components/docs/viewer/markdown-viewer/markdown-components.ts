@@ -19,6 +19,8 @@ import {
   MarkdownTd,
   MarkdownTh,
 } from "./markdown-renderers";
+import { AnnotationCard } from "./AnnotationCard";
+import { ANNOTATION_ELEMENT } from "@/lib/markdown/remark-annotations";
 
 /**
  * The viewer's react-markdown renderers. A module constant: its identity must
@@ -35,6 +37,8 @@ import {
  */
 export const markdownComponents = {
   ...MATH_COMPONENTS,
+  // Notes kept in the document (lib/markdown/annotations.ts).
+  [ANNOTATION_ELEMENT]: AnnotationCard,
   input: MarkdownCheckbox,
   h1: MarkdownH1,
   h2: MarkdownH2,
@@ -52,6 +56,6 @@ export const markdownComponents = {
   table: MarkdownTable,
   td: MarkdownTd,
   th: MarkdownTh,
-  // react-markdown's `Components` type lists HTML element names only; the two
-  // math element names are custom.
+  // react-markdown's `Components` type lists HTML element names only; the
+  // math and annotation element names are custom.
 } as Components;

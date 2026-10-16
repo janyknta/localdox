@@ -78,7 +78,9 @@ export function QuestionPalette({
   currentId,
   family,
   onNavigate,
+  disabled = false,
 }: {
+  disabled?: boolean;
   r: Ruleset;
   paper: Question[];
   session: Session;
@@ -102,6 +104,7 @@ export function QuestionPalette({
             aria-label={`Question ${n}: ${STATUS_WORDS[status]}`}
             aria-current={id === currentId ? "true" : undefined}
             disabled={
+              disabled ||
               (!r.navigation.free && id !== currentId) ||
               session.lockedSections.includes(target.section) ||
               (r.timing.mode === "per_section" && target.section !== current.section)

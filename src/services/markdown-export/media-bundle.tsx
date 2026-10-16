@@ -11,6 +11,7 @@ import JSZip from "jszip";
 import type { MdFile } from "@/lib/markdown/markdown-utils";
 import { getDocumentKind, dataUrlToArrayBuffer } from "@/lib/markdown/document-utils";
 import { prepareWorkspaceEmbeds } from "@/lib/workspace/workspace-artifacts";
+import { noteEmbedContent } from "@/lib/markdown/note-links";
 import {
   artifactReference,
   isArtifactUrl,
@@ -239,8 +240,10 @@ export async function buildMarkdownHTML(
         ancestors.length < 5 &&
         !ancestors.includes(`${artifact.workspaceId}/${attached.id}`)
       ) {
+        const body = artifact.fragment ? noteEmbedContent(attached.content, artifact.fragment) : attached.content;
+        if (body === null) throw new Error(`Could not find ${artifact.fragment} in ${attached.name}.`);
         const nested = await renderDocument(
-          attached,
+          { ...attached, content: body },
           {
             ...ctx,
             workspaceId: artifact.workspaceId,

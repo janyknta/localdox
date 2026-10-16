@@ -1,5 +1,5 @@
 /*
- * Exam Workspaces design system.
+ * exam sessions design system.
  *
  * One token layer (below), one level of surface, hairlines for grouping, colour
  * only where it carries meaning. Components are prefixed `ex-`; screens use
@@ -2314,4 +2314,28 @@ label .ex-zoom,
 .xp-structure textarea {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+/* Entry screens reserve emphasis for the action and the question. */
+.xf-entry-details {
+  margin-top: 18px;
+  border-top: 1px solid var(--ex-hairline);
+  padding-top: 12px;
+}
+.xf-entry-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--ex-text-2);
+  font-size: 13px;
+  padding: 4px 0;
+}
+.xf-entry-details > summary:hover {
+  color: var(--ex-text);
+}
+.xf-entry-details > summary:focus-visible {
+  outline: 2px solid var(--ex-accent);
+  outline-offset: 4px;
+}
+.xf-entry-details .xe-attempts {
+  margin-top: 12px;
 }

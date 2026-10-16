@@ -11,7 +11,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   const container = usePortalContainer();
   const toaster = (
     <Sonner
-      className="toaster group"
+      className="toaster group pointer-events-auto"
       toastOptions={{
         classNames: {
           toast:

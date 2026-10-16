@@ -142,8 +142,8 @@ frames. The attribute is short, and only blocks carry it. Addressing work
 
 ## Known limits
 
-- Highlights still anchor by rendered offsets and quotes; moving them
-  to source anchors is a natural next step.
+- Highlights are kept in the Markdown and painted by file span
+  ([annotations.md](annotations.md)), so they use addressing directly.
 - Within a Mermaid diagram, a hit lands on the first label showing the query,
   not the n-th.
 - A table query that spans two cells isn't a hit (the index separates cells),

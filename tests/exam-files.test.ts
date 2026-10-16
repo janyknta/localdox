@@ -15,9 +15,27 @@ import {
 import { ExamImportError } from "../src/services/exams/schema.ts";
 import { describeIssue } from "../src/services/exams/ui/display.ts";
 import { parseXrule } from "../src/services/exams/xrule.ts";
-import { gateXruleTemplate } from "../src/services/exams/templates.ts";
+import {
+  gateMockXruleTemplate,
+  gateXruleTemplate,
+  XAM_TEMPLATE,
+} from "../src/services/exams/templates.ts";
 
 const xrule = (fields: object) => JSON.stringify({ xrule: 1, name: "Mock 1", ...fields });
+
+test("uploaded GATE mocks use their actual question count and retain GATE controls", () => {
+  const setup = parseXrule(gateMockXruleTemplate("Short mock", 3));
+  const { exam } = readExamFile(setup, "short", XAM_TEMPLATE);
+  assert.equal(exam.exam.paper.length, 3);
+  assert.equal(exam.exam.rules.timing.durationMinutes, 9);
+  assert.equal(exam.exam.rules.navigation.requireSave, true);
+  assert.equal(exam.exam.rules.ui.profile, "gate");
+  assert.equal(exam.exam.rules.tools.calculator, "scientific");
+  assert.equal(exam.exam.rules.questionTypes.nat?.inputMode, "virtual_keypad");
+  const full = parseXrule(gateMockXruleTemplate("Full mock", 65));
+  assert.equal(full.questionCount, 65);
+  assert.equal(full.durationMinutes, 180);
+});
 function issuesOf(run: () => unknown) {
   try {
     run();
@@ -174,4 +192,34 @@ test("an .xrule and its .xam make a runnable exam", () => {
     readExamFile(parseXrule(xrule({ questionCount: 3 })), "mock-1", XAM, "mock-1.xam"),
   );
   assert.match(wrongCount[0].message, /Expected 3 exam questions, found 1/);
+});
+
+test("every file exam enforces strict browser controls while preserving stricter author policies", () => {
+  const { exam } = readExamFile({ ...DEFAULT_SETUP, name: "Strict" }, "strict", XAM);
+  const rules = exam.exam.rules;
+  assert.equal(rules.navigation.requireSave, true);
+  assert.equal(rules.timing.pausable, false);
+  assert.equal(rules.timing.autoSubmitOnExpiry, true);
+  assert.deepEqual(rules.integrity, {
+    requireFullscreen: true,
+    maxTabSwitches: 2,
+    onViolation: "warn_then_autosubmit",
+    blockCopyPaste: true,
+    blockContextMenu: true,
+  });
+  const root = structuredClone(GATE_RULESET);
+  root.integrity.onViolation = "autosubmit";
+  root.integrity.maxTabSwitches = 0;
+  root.timing.pausable = true;
+  root.timing.autoSubmitOnExpiry = false;
+  const strict = readExamFile(
+    { ...DEFAULT_SETUP, name: "Stricter", rootRules: root },
+    "stricter",
+    XAM,
+  ).exam.exam.rules;
+  assert.equal(strict.integrity.onViolation, "autosubmit");
+  assert.equal(strict.integrity.maxTabSwitches, 0);
+  assert.equal(strict.timing.pausable, false);
+  assert.equal(strict.timing.autoSubmitOnExpiry, true);
+  assert.equal(root.timing.pausable, true); // authored source remains intact
 });

@@ -202,7 +202,7 @@ For events with $P(A) > 0$ and $P(B) > 0$, which statements always hold?
 
 ## Delivering them
 
-**As loose files:** the learner opens an Exam Workspace, chooses **+ ▸ Upload files** and selects all three at once.
+**As loose files:** the learner opens a workspace, chooses **+ ▸ Upload files** and selects all three at once.
 
 **As a workspace with folders:** put them in a folder tree and pack it.
 
@@ -218,4 +218,4 @@ course/
 python localdox_check.py --build course probability-course.json "Probability course"
 ```
 
-`--build` checks every file first and writes nothing if any check fails. The learner imports `probability-course.json` with Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**, which creates an Exam Workspace with the folder `01 Probability`. The `.xrule` sits at the workspace root, listed under Settings ▸ Exam rules.
+`--build` checks every file first and writes nothing if any check fails. The learner imports `probability-course.json` with Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**, which creates a workspace with the folder `01 Probability`. The `.xrule` sits at the workspace root, listed under Settings ▸ Exam rules.

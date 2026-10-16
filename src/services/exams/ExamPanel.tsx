@@ -3,7 +3,6 @@ import type { AttemptRecord } from "./storage";
 import { canReleaseSolutions } from "./session";
 import { progressionPolicy, scorePercentage, meetsPassingScore } from "./study-plan";
 import type { TopicItem } from "./topics";
-import { ExamMarkdown } from "./ExamMarkdown";
 import { Button, LinkButton } from "./ui/kit";
 import { formatDateTime, formatPercent } from "./ui/display";
 
@@ -54,9 +53,9 @@ export function ExamPanel({
 
   return (
     <section className="ex-surface xp-step-panel" aria-label="Exam">
-      {topic.summaryMd && <ExamMarkdown source={topic.summaryMd} />}
       <p className="ex-meta tabular">
         <span>{plural(exam.paper.length, "question")}</span>
+        <span>{exam.rules.timing.durationMinutes} minutes</span>
         {p.status !== "passed" && <span>{plural(p.attemptsRemaining, "attempt")} left</span>}
         {p.cycle.index > 0 && <span>Paper {p.cycle.index + 1}</span>}
       </p>
@@ -104,17 +103,12 @@ export function ExamPanel({
                   : "Start exam"}
             </Button>
           </div>
-          {!p.activeAttempt && (
-            <p className="ex-small">Answers, keys and solutions are shown after you submit.</p>
-          )}
         </>
       )}
 
       {done.length > 0 && (
-        <section aria-label="Attempts" className="ex-stack" style={{ gap: 8 }}>
-          <h2 className="ex-small" style={{ fontWeight: 600 }}>
-            Attempts
-          </h2>
+        <details aria-label="Attempts" className="xf-entry-details">
+          <summary>Attempt history ({done.length})</summary>
           <ol className="ex-surface ex-surface--flush ex-hairline-list xe-attempts">
             {done.map((a, i) => {
               const percent = percentOf(a);
@@ -136,7 +130,7 @@ export function ExamPanel({
               );
             })}
           </ol>
-        </section>
+        </details>
       )}
     </section>
   );

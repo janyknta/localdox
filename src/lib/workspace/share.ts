@@ -12,6 +12,7 @@ import { portableFiles, migrateData } from "./binary.ts";
 import type { FolderRecord, PersistedFile, WorkspaceRecord } from "./persistence";
 import { parseDerivation, remapDerivation } from "../../services/doc-conversion/types.ts";
 import { MAX_IMPORT_BYTES, parseImportJson, validateImportedFiles } from "./import-schema.ts";
+import { parseAnnotations, stripAnnotations } from "../markdown/annotations.ts";
 
 const BYTEBIN_URL = "https://bytebin.lucko.me";
 
@@ -63,9 +64,19 @@ export async function serializeSharedFiles(
 export interface ShareSelection {
   /** Files to send. Binned files are sent only when listed here explicitly. */
   fileIds: string[];
-  /** Carry notes and highlights on the included files. */
+  /**
+   * Keep the ```note / ```<colour>note blocks in the shared files' Markdown.
+   * When false they are removed from each text file's content.
+   */
   includeAnnotations: boolean;
 }
+
+/**
+ * Highlights and notes live in a document's text (markdown/annotations.ts).
+ * A file with a binary body keeps its `content` as-is: it is not where the
+ * reader writes annotations.
+ */
+const holdsAnnotations = (file: Pick<PersistedFile, "data">) => file.data === undefined;
 
 /**
  * The workspace a share link carries: only the chosen files, only the folders
@@ -99,9 +110,6 @@ export function buildWorkspaceShare(
   const onShared = (fileId: string) => ids.has(fileId);
   // Stars never travel: starring was removed from the app, so the sender can
   // no longer see what they would be handing over (see saved-items.ts).
-  const highlights = selection.includeAnnotations
-    ? (record.highlights ?? []).filter((h) => onShared(h.fileId))
-    : [];
   const order = (record.ui.fileOrder ?? []).filter(onShared);
   const active =
     record.ui.activeFileId && onShared(record.ui.activeFileId)
@@ -117,7 +125,10 @@ export function buildWorkspaceShare(
       const file: PersistedFile = {
         id: f.id,
         name: f.name,
-        content: f.content,
+        content:
+          selection.includeAnnotations || !holdsAnnotations(f)
+            ? f.content
+            : stripAnnotations(f.content),
         folderId: f.folderId && keptFolders.has(f.folderId) ? f.folderId : null,
       };
       if (f.data !== undefined) file.data = f.data;
@@ -132,7 +143,6 @@ export function buildWorkspaceShare(
     folders,
     bookmarks: [],
     saved: [],
-    highlights,
     ui: {
       activeFileId: active,
       expanded: {},
@@ -149,7 +159,10 @@ export function buildWorkspaceShare(
 /** How many private annotations a set of files carries — the opt-in's label. */
 export function countAnnotations(record: WorkspaceRecord, fileIds: Iterable<string>): number {
   const ids = new Set(fileIds);
-  return (record.highlights ?? []).filter((h) => ids.has(h.fileId)).length;
+  let total = 0;
+  for (const file of record.files)
+    if (ids.has(file.id) && holdsAnnotations(file)) total += parseAnnotations(file.content).length;
+  return total;
 }
 
 /** Parse a `#share-files=` payload. Throws when it isn't one. */

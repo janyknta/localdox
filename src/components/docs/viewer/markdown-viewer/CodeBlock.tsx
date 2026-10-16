@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Expand, Minimize2 } from "lucide-react";
 import { MermaidBlock } from "@/services/diagrams";
 import { MindMapBlock } from "@/services/mindmap";
+import { isMindMappable } from "@/services/mindmap/mindmap";
 import { JsonTree } from "../JsonTree";
 import { InteractiveBlock } from "../InteractiveBlock";
 import { extractText } from "./extract-text";
@@ -132,7 +133,8 @@ export function CodeBlock({ children, ...rest }: any) {
     );
   }
 
-  // A ```json fence renders as a browsable tree rather than a wall of text.
+  // Structured JSON opens as a mind map with a switch to the browsable tree.
+  // Flat containers keep the JSON tree because there is no hierarchy to draw.
   // Malformed JSON falls through to the plain code block below, so a typo
   // still shows the author what they wrote instead of an error.
   if (lang === "json") {
@@ -142,7 +144,11 @@ export function CodeBlock({ children, ...rest }: any) {
       if (parsed !== null && typeof parsed === "object") {
         return (
           <Drawn span={span}>
-            <JsonFigure value={parsed} />
+            {isMindMappable(parsed) ? (
+              <MindMapBlock code={raw} title={meta} />
+            ) : (
+              <JsonFigure value={parsed} />
+            )}
           </Drawn>
         );
       }

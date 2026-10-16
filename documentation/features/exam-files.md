@@ -2,15 +2,15 @@
 
 Three plain files, organised in folders like any other:
 
-| File           | Format   | Holds                                                                            | Opens                                                 |
-| -------------- | -------- | -------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `mock-1.xam`   | Markdown | An exam paper: questions, keys and solutions.                                    | Sat in an Exam Workspace; elsewhere a keyless preview |
-| `mock-1.xrule` | JSON     | How exams run: name, time, pass mark, attempts, marking, tools, any engine rule. | Settings ▸ Exam rules                                 |
-| `bayes.xp`     | Markdown | Practice questions with their solutions. No rules.                               | Anywhere, answered in place                           |
+| File           | Format   | Holds                                                                            | Opens                                     |
+| -------------- | -------- | -------------------------------------------------------------------------------- | ----------------------------------------- |
+| `mock-1.xam`   | Markdown | An exam paper: questions, keys and solutions.                                    | Start, resume and review in any workspace |
+| `mock-1.xrule` | JSON     | How exams run: name, time, pass mark, attempts, marking, tools, any engine rule. | Settings ▸ Exam rules                     |
+| `bayes.xp`     | Markdown | Practice questions with their solutions. No rules.                               | Anywhere, answered in place               |
 
 ## Why exams and practice are separate files
 
-They follow opposite rules. An **exam** is strict: timed, a pass mark, a limited number of attempts, and its keys and solutions stay sealed until the attempt is submitted. **Practice** is the reverse: no timer, no limit, and the key and solution appear the moment a question is answered, because that is how practice teaches.
+They follow opposite rules. An **exam** is strict: timed, a pass mark, a limited number of attempts, and its keys and solutions stay sealed until the attempt is submitted. **Practice** is the reverse: a per-question clock, optional deadlines, no attempt limit, and the key and solution appear the moment a question is answered, because that is how practice teaches.
 
 Papers used to hold both, a `# Practice` part above the `# Exam` part, plus Learn, Practice, Exam and Review steps that unlocked one after another. One file then had to hide its keys and show them, depending on which heading a question sat under, and the exam waited behind a self-reported "I've finished studying". Splitting by file makes the rule follow the file type: an `.xam` never reveals a key before submission, and an `.xp` never hides one. A paper that still has a `# Practice` heading is refused with a message pointing at `.xp`.
 
@@ -80,9 +80,13 @@ Three even faces, one of them a 6.
 :::
 ```
 
-The paper's grammar, made lighter: no `.xrule`, no header, `marks` optional (default 1). Any heading starts a group, shown as a section title above its questions. Every question needs its solution, and keys are checked when the file is read, so a mistake shows as a problem to fix, not as a wrong verdict.
+The paper's grammar, made lighter: no `.xrule`, no header, `marks` optional (default 1). Headings organize the source; the practice reader shows only the question, options, solution, question timer and quiet progress. Every question needs its solution, and keys are checked when the file is read, so a mistake shows as a problem to fix, not as a wrong verdict.
 
 **Answering.** Choosing an MCQ option is answering it. MSQ options are picked, then **Check answer**. A NAT is typed, then Enter. Each question then shows Correct, Partly correct or Not quite, marks the right options and the one chosen, and opens its solution. An answer is final; **Start over** clears them all. Scoring is the exam's own `scoreQuestion`, without negative marking.
+
+**Session controls.** The arrows, question number, timer and a three-dot settings button share one row above the question. Selecting an MCQ option reveals its solution for right and wrong answers; there is no separate reveal action. Arrows preserve unfinished MSQ/NAT drafts. Practice automatically pauses on tab/window changes and while Settings is open, then resumes on return. There are no playback buttons. The three-dot button opens Settings → Practice at `/settings/practice/<file id>`, containing time limits, timer/progress visibility, linked rules, restart and end-session actions. End saves progress and stops timing; Continue practice returns to the same question. Current question, drafts and ended state survive reloads in `localdox:practice-session:<file id>`. Start over clears answers, times and session state. Changes apply explicitly and persist in the linked `.xrule`; saving defaults creates one for the file. The question view has no inline settings panel.
+
+**Exam enforcement.** All `.xam` sessions require fullscreen and explicit Save & next, disallow pausing, block copy/paste and right-click, and submit at the deadline. Window/tab or fullscreen exits are recorded: two warnings, then submission on the third incident, unless authored limits are stricter. In-app navigation is blocked until submission. These are browser controls, without camera monitoring or operating-system lockdown.
 
 **Where answers live.** In this browser's `localStorage`, under `localdox:practice-answers:<file id>`. Practice progress is the reader's own and cheap to lose, so it isn't written into the file, exported, or put behind exam storage's writer lock (which would make a practice file wait for an open exam). Each answer stores a hash of its question and key; editing either retires that answer and leaves the others. Storage that is full or blocked only means answers don't survive a reload.
 
@@ -90,18 +94,24 @@ The paper's grammar, made lighter: no `.xrule`, no header, `marks` optional (def
 
 ## Sitting a paper
 
-In an **Exam Workspace**, opening a `.xam` shows its rules, then one action for where the learner stands (Start, Resume, Retake, Review answers, or Use the edited paper) and the attempts so far. The instructions and the running exam cover the whole screen; once it is submitted, the result replaces the paper's panel in the reader, with the sidebar back beside it. Nothing unlocks first. Keys and solutions are read only from a submitted attempt (`loadSolutions` refuses earlier), and the result's **Answers & solutions**, on the same screen as the score, is the first place they appear.
+In **any workspace**, opening a `.xam` shows its rules, then one action for where the learner stands (Start, Resume, Retake, Review answers, or Use the edited paper) and the attempts so far. An uploaded paper without a rules tag or applicable rules file uses the default rules immediately: 30 minutes, 70% to pass, three attempts and no negative marking. **Default rules** creates an editable rules file and opens it in Settings. The instructions and the running exam cover the whole screen; once it is submitted, the result replaces the paper's panel in the reader, with the sidebar back beside it. Nothing unlocks first. Keys and solutions are read only from a submitted attempt (`loadSolutions` refuses earlier), and the result's **Answers & solutions**, on the same screen as the score, is the first place they appear.
 
-Outside Exam Workspaces a `.xam` previews its questions and options without keys, with a note saying so. The source, through **Edit**, is the one place a key is visible before submission: it is the author's file.
+Before the first attempt, **Use GATE style** creates and attaches a GATE ruleset sized to the uploaded paper. Its duration scales from three hours for 65 questions, rounded up to whole minutes and capped at three hours. It enables the GATE palette, Save & next, review flags, NAT keypad, scientific calculator and one-third negative marking for MCQs. The rules link lets you adjust the duration. A full 65-question paper must satisfy the GATE section composition; shorter mocks use their own sections. Practice remains a separate `.xp` file with immediate answer feedback.
+
+Standalone previews without a workspace show questions and options without keys. The source, through **Edit**, is the one place a key is visible before submission: it is the author's file.
 
 **Which rules apply.**
 
 1. The ruleset named in the paper's header, when it exists. If it's gone (binned, renamed), the paper says so rather than run under another.
 2. Otherwise, from the paper's folder up to the root: `mock-1.xrule` beside `mock-1.xam` wins; else a folder with exactly one `.xrule` applies it to every paper beneath.
 3. Two unrelated `.xrule` files at one level stop the search: the paper asks which to use.
-4. With none, the paper offers to pick a ruleset or make one (**New ruleset**).
+4. With none and no explicit rules tag, the paper uses the default rules and offers **Start exam** immediately. Missing named rules or ambiguous choices still require selecting or restoring the ruleset.
 
-Rulesets aren't listed in the sidebar; Settings ▸ Exam rules lists and edits them, and a paper's rules link opens them there. Files in the Bin don't count.
+Rulesets aren't listed in the sidebar; Settings ▸ Exam rules lists and edits them, and a paper's rules link opens them there. Uploading a `.xrule` explains this location and offers **Open exam rules**. Files in the Bin don't count.
+
+**Configure a paper.** Its three-dots menu offers **Configure**: select a ruleset, use automatic folder rules, edit the selected ruleset, create one, or apply GATE style. Quick settings cover the time limit, passing score and maximum attempts. Saving changes to these values creates a ruleset for this paper, preserving shared rules for other papers. Advanced marking, tools, sections and navigation remain editable through **Edit ruleset** in Settings. Changes after an attempt follow the pinning rules below.
+
+**Create from the sidebar.** Right-click and choose **New** → **File**, **Folder**, **Board**, **Exam** or **Ruleset**. New documents and folders go inside the clicked folder (or a clicked file's parent); rulesets open in Settings ▸ Exam rules.
 
 **A GATE ruleset in one step.** Settings ▸ Exam rules ▸ **New ruleset** offers two starting points: the default rules, or **GATE** (`gateXruleTemplate`): `preset: "gate"` with the paper-level facts written out (65 questions, 180 minutes, 25% to pass, 3 attempts) so they are visible and easy to change. The preset brings the rest: General Aptitude and Subject sections with their 1- and 2-mark composition, −1/3 for a wrong MCQ, no penalty or partial credit for MSQ, the NAT keypad, the scientific calculator, the GATE palette and Save & next (`navigation.requireSave`). A full paper tags each question `section=GA` or `section=subject`; an untagged one is reported with the tags to use. For a shorter mock, lower `questionCount` and `durationMinutes`: sections then come from the questions present, and the GATE marking still applies.
 
@@ -116,7 +126,7 @@ Rulesets aren't listed in the sidebar; Settings ▸ Exam rules lists and edits t
 ## Flow
 
 ```
-open mock-1.xam (Exam Workspace)
+open mock-1.xam (any workspace)
   └─ rulesFileFor ──▶ the .xrule ─parseXrule─▶ ExamSetup ─┐
      mock-1.xam text + workspace images ─parseExamFile─────┴─ readExamFile ─▶ exam record + sealed keys
   └─ syncPaperPlan: current / rebuilt / pinned ─▶ ExamPanel ─▶ full-screen session ─▶ result ─▶ review
@@ -138,7 +148,7 @@ open bayes.xp (any workspace)
 - **Keys live in the paper's source.** Hiding them everywhere but a submitted attempt's review is a product rule, not secrecy: anyone with the file can read it in Edit. Local files have no server to keep a secret.
 - **Practice answers are per browser.** They don't follow a workspace export or another device, and a file deleted from the workspace leaves its small `localStorage` entry behind. Worth it for practice that never waits on, or is blocked by, exam storage.
 - **A long `.xp` renders whole.** It reads like a document, every question on one page. The generated 100-question packs parse in about 20 ms; solutions render only once answered.
-- **Images resolve only where files are at hand.** In an Exam Workspace a paper and an `.xp` find images by file name in the workspace. Elsewhere an image shows as "Image not available: name".
+- **Images resolve from the current workspace.** Papers and `.xp` files find images by file name. Standalone previews without workspace assets show "Image not available: name".
 - **One open paper per workspace.** Exam storage has one writer lock per workspace; a second paper waits until the first closes. Practice files take no lock.
 - **The rules block is the engine's own ruleset**, not a friendlier copy: every engine rule is reachable, at the cost of verbosity. Plain fields and `preset` cover most files.
 

@@ -15,6 +15,12 @@ import {
   FolderOpen,
   CheckSquare,
   X,
+  Plus,
+  FilePlus,
+  FolderPlus,
+  PenTool,
+  FileQuestion,
+  FileCog,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -23,9 +29,11 @@ import {
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuTrigger,
+  ContextMenuSub,
+  ContextMenuSubTrigger,
+  ContextMenuSubContent,
 } from "@/components/ui/context-menu";
 import { modKeyLabel } from "@/lib/platform/keyboard";
-import type { Highlight } from "@/lib/markdown/dom-highlighter";
 import type { MdFile } from "@/lib/markdown/markdown-utils";
 import { readingMinutes } from "@/lib/markdown/markdown-utils";
 import { fileLabel, getDocumentKind, isEditableKind } from "@/lib/markdown/document-utils";
@@ -128,6 +136,7 @@ interface Props {
   onRenameFile: (id: string, newName: string) => void;
   /** Open a document in the editor. Only offered for editable text documents. */
   onEditFile?: (id: string) => void;
+  onConfigureExam?: (id: string) => void;
   onConvertFile?: (id: string) => void;
   convertingFileId?: string | null;
   /**
@@ -141,7 +150,8 @@ interface Props {
   onCreateMermaid?: (folderId?: string | null) => void;
   onCreateBoard?: (folderId?: string | null) => void;
   /** Open the New exam dialog: an `.xam` paper tagged with a ruleset. */
-  onCreateExam?: () => void;
+  onCreateExam?: (folderId?: string | null) => void;
+  onCreateRules?: () => void;
   /** A new `.xp` practice file, named first like any new file. */
   onCreatePractice?: (folderId?: string | null) => void;
   /** Create a folder, optionally nested inside an existing one. */
@@ -157,9 +167,6 @@ interface Props {
   onRenameCurrentWorkspace: (name: string) => void;
   onDeleteCurrentWorkspace: () => void;
   onClearStorage: () => void;
-  highlights: Highlight[];
-  onRemoveHighlight: (id: string) => void;
-  /** Open the isolated "highlights only" view for a file (text-based only). */
   onReorderFile?: (oldIndex: number, newIndex: number) => void;
   /** Move a folder to `targetId`'s place in the list, beside it under the same parent. */
   onReorderFolder?: (folderId: string, targetId: string) => void;
@@ -216,6 +223,7 @@ function SidebarImpl({
   onRemoveSelection,
   onRenameFile,
   onEditFile,
+  onConfigureExam,
   onConvertFile,
   convertingFileId,
   folders: allFolders = [],
@@ -223,6 +231,7 @@ function SidebarImpl({
   onCreateMermaid,
   onCreateBoard,
   onCreateExam,
+  onCreateRules,
   onCreatePractice,
   onCreateFolder,
   onRenameFolder,
@@ -234,8 +243,6 @@ function SidebarImpl({
   onRenameCurrentWorkspace,
   onDeleteCurrentWorkspace,
   onClearStorage,
-  highlights,
-  onRemoveHighlight,
   onReorderFile,
   onReorderFolder,
   onSortByName,
@@ -350,14 +357,14 @@ function SidebarImpl({
     setSelectedFolderIds(new Set(seed?.folderId ? [seed.folderId] : []));
   };
 
-  // Folders start open — a folder the reader just made should show what lands
-  // in it — and only the ones they collapse are remembered (for this session).
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
-  // Folder currently hovered by a file drag, so the drop target is obvious.
-  const [dropFolderId, setDropFolderId] = useState<string | null>(null);
+  // Folders start closed. Opening one reveals its immediate children; nested
+  // folders stay closed until opened individually (remembered for this session).
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  // Hovered drop target: null is the workspace root; undefined is no target.
+  const [dropFolderId, setDropFolderId] = useState<string | null | undefined>(undefined);
 
   const toggleFolder = (id: string) => {
-    setCollapsedFolders((prev) => {
+    setExpandedFolders((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -527,12 +534,17 @@ function SidebarImpl({
         e.dataTransfer.dropEffect = "move" as const;
         setDropFolderId(folderId);
       },
-      onDragLeave: () => setDropFolderId((current) => (current === folderId ? null : current)),
+      onDragLeave: (e: React.DragEvent) => {
+        if (!accepts(e)) return;
+        e.stopPropagation();
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+        setDropFolderId((current) => (current === folderId ? undefined : current));
+      },
       onDrop: (e: React.DragEvent) => {
         if (!accepts(e)) return;
         const fileId = e.dataTransfer.getData(FILE_DND);
         const draggedFolder = e.dataTransfer.getData(FOLDER_DND);
-        setDropFolderId(null);
+        setDropFolderId(undefined);
         if (!fileId && !draggedFolder) return;
         e.preventDefault();
         e.stopPropagation();
@@ -650,7 +662,7 @@ function SidebarImpl({
     if (depth > 12) return null;
     const items = sorted.filter((f) => f.folderId === folder.id);
     const subfolders = childrenOf(folder.id);
-    const collapsed = collapsedFolders.has(folder.id);
+    const collapsed = !expandedFolders.has(folder.id);
     const isDropTarget = dropFolderId === folder.id && draggingFolderId !== folder.id;
     const count = items.length + subfolders.length;
     // Reorder mode turns the folder's drag from "file it inside another
@@ -734,7 +746,7 @@ function SidebarImpl({
               : parentDragActive
                 ? () => {
                     setDraggingFolderId(null);
-                    setDropFolderId(null);
+                    setDropFolderId(undefined);
                   }
                 : undefined
           }
@@ -907,7 +919,7 @@ function SidebarImpl({
             dragActive || folderDragActive
               ? () => {
                   endDrag();
-                  setDropFolderId(null);
+                  setDropFolderId(undefined);
                   setDraggingFileId(null);
                 }
               : undefined
@@ -973,6 +985,9 @@ function SidebarImpl({
           </button>
           {!selecting ? (
             <FileMenu
+              onConfigure={
+                kind === "exam" && onConfigureExam ? () => onConfigureExam(file.id) : undefined
+              }
               // The file types with an editor behind them. A PDF or a
               // spreadsheet has no edit mode to enter, so the item is absent
               // rather than present and inert.
@@ -1121,6 +1136,7 @@ function SidebarImpl({
             onCreateBoard={onCreateBoard ? () => onCreateBoard(null) : undefined}
             onCreateFolder={onCreateFolder ? promptNewFolder : undefined}
             onCreateExam={onCreateExam}
+            onCreateRules={onCreateRules}
             onCreatePractice={onCreatePractice ? () => onCreatePractice(null) : undefined}
             onUpload={onAddFiles}
           />
@@ -1149,7 +1165,10 @@ function SidebarImpl({
                 : null;
             }}
           >
-            <nav className="flex-1 overflow-y-auto px-3 pb-3">
+            <nav
+              className="flex flex-1 flex-col overflow-y-auto px-3 pb-3"
+              {...(showFolders ? dropTargetProps(null) : {})}
+            >
               {reordering && !viewActive && (
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-2 text-xs text-primary">
                   <GripVertical className="h-3.5 w-3.5 shrink-0" />
@@ -1179,17 +1198,16 @@ function SidebarImpl({
               {total === 0 && folders.length === 0 ? null : (
                 <>
                   {showFolders && rootFolders.map((folder) => renderFolder(folder, 0))}
-                  {/* The top level's own drop target, and the reason a file can be
-                dragged back out of a folder: it wraps the unfiled list *and*
-                the empty space below it, so the gap under the last row is a
-                real place to drop rather than dead pixels. */}
+                  {/* Fill the remaining explorer space so files and folders can
+                      be dragged out to the root anywhere below the tree. The
+                      nav also accepts drops in its padding; folder targets
+                      stop propagation so nested drops keep their destination. */}
                   <div
-                    className={`min-h-16 rounded-lg ${
-                      // Only while something is actually being dragged. This used to
-                      // test `dropFolderId === null`, which is the *resting* state —
-                      // so the ring was drawn permanently, reading as a stray border
-                      // around the unfiled files.
-                      showFolders && draggingFileId !== null && dropFolderId === null
+                    data-sidebar-root
+                    className={`min-h-16 flex-1 rounded-lg ${
+                      showFolders &&
+                      (draggingFileId !== null || draggingFolderId !== null) &&
+                      dropFolderId === null
                         ? "ring-2 ring-primary/60"
                         : ""
                     }`}
@@ -1208,12 +1226,90 @@ function SidebarImpl({
                         {groupItem.items.map(renderFileRow)}
                       </div>
                     ))}
+                    {showFolders && (draggingFileId !== null || draggingFolderId !== null) && (
+                      <p className="px-2 py-3 text-xs text-muted-foreground">
+                        Move to workspace root
+                      </p>
+                    )}
                   </div>
                 </>
               )}
             </nav>
           </ContextMenuTrigger>
           <ContextMenuContent className="z-(--z-menu) w-56 rounded-xl p-1.5 shadow-xl">
+            <ContextMenuSub>
+              <ContextMenuSubTrigger className={CONTEXT_ITEM}>
+                <Plus className="h-4 w-4" />
+                New
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="z-(--z-menu) w-48 rounded-xl p-1.5">
+                <ContextMenuItem
+                  className={CONTEXT_ITEM}
+                  disabled={!onCreateFile}
+                  onSelect={() =>
+                    onCreateFile?.(
+                      contextRowRef.current?.folderId ??
+                        files.find((f) => f.id === contextRowRef.current?.fileId)?.folderId ??
+                        null,
+                    )
+                  }
+                >
+                  <FilePlus className="h-4 w-4" />
+                  File
+                </ContextMenuItem>
+                <ContextMenuItem
+                  className={CONTEXT_ITEM}
+                  disabled={!onCreateFolder}
+                  onSelect={() =>
+                    promptNewFolder(
+                      contextRowRef.current?.folderId ??
+                        files.find((f) => f.id === contextRowRef.current?.fileId)?.folderId ??
+                        null,
+                    )
+                  }
+                >
+                  <FolderPlus className="h-4 w-4" />
+                  Folder
+                </ContextMenuItem>
+                <ContextMenuItem
+                  className={CONTEXT_ITEM}
+                  disabled={!onCreateBoard}
+                  onSelect={() =>
+                    onCreateBoard?.(
+                      contextRowRef.current?.folderId ??
+                        files.find((f) => f.id === contextRowRef.current?.fileId)?.folderId ??
+                        null,
+                    )
+                  }
+                >
+                  <PenTool className="h-4 w-4" />
+                  Board
+                </ContextMenuItem>
+                <ContextMenuItem
+                  className={CONTEXT_ITEM}
+                  disabled={!onCreateExam}
+                  onSelect={() =>
+                    onCreateExam?.(
+                      contextRowRef.current?.folderId ??
+                        files.find((f) => f.id === contextRowRef.current?.fileId)?.folderId ??
+                        null,
+                    )
+                  }
+                >
+                  <FileQuestion className="h-4 w-4" />
+                  Exam
+                </ContextMenuItem>
+                <ContextMenuItem
+                  className={CONTEXT_ITEM}
+                  disabled={!onCreateRules}
+                  onSelect={onCreateRules}
+                >
+                  <FileCog className="h-4 w-4" />
+                  Ruleset
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuSeparator />
             {selecting ? (
               <>
                 <ContextMenuItem

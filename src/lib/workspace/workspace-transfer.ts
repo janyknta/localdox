@@ -1,7 +1,7 @@
 /**
  * Moving documents and folders from one workspace into another.
  *
- * A workspace is a closed world: file ids, folder ids, stars and highlights all
+ * A workspace is a closed world: file ids, folder ids, stars and rough work all
  * only mean anything relative to the record that holds them. So a "move" is not
  * a pointer change, it is a transplant — the selected records are rewritten into
  * the destination and removed from the source, and everything that referred to
@@ -18,10 +18,11 @@
  *    workspaces through an import or a share link is not, and it carries its
  *    original id. Colliding ids are reassigned, and every reference to them is
  *    rewritten to match.
- *  - **Stars, highlights, notes and linked rough work hang off file ids.**
- *    They live in the workspace record beside the files rather than inside
- *    them, so they have to be moved explicitly. Left behind, the reader's annotations vanish with
- *    no warning — and a note's source link would point at nothing.
+ *  - **Stars and linked rough work hang off file ids.** They live in the
+ *    workspace record beside the files rather than inside them, so they have
+ *    to be moved explicitly. Left behind, they vanish with no warning.
+ *    (Highlights and notes are part of each document's Markdown, so they
+ *    travel with the file content and need nothing here.)
  *
  * The planning half is pure and exhaustively testable; `persistence` is only
  * touched by the caller that applies the result.
@@ -29,8 +30,6 @@
 
 import type { FolderRecord, PersistedFile, WorkspaceRecord } from "./persistence";
 import type { SavedItem } from "./saved-items";
-import type { Highlight } from "../markdown/dom-highlighter";
-import type { Note } from "./notes";
 import type { Scratchpad } from "./rough-work";
 
 /** What the reader picked in the sidebar. */
@@ -45,9 +44,6 @@ export interface TransferPlan {
   /** Folders to write into the destination, ids and `parentId` already resolved. */
   folders: FolderRecord[];
   saved: SavedItem[];
-  highlights: Highlight[];
-  /** Notes copied from the moving documents — they follow their source. */
-  notes: Note[];
   /** Rough work linked to the moving documents; unlinked pads stay put. */
   scratchpads: Scratchpad[];
   /** Ids to drop from the source — expanded to include folder descendants. */
@@ -62,7 +58,6 @@ export interface TransferCounts {
   files: number;
   folders: number;
   saved: number;
-  highlights: number;
 }
 
 function newId(): string {
@@ -114,10 +109,7 @@ export function expandFolderIds(
  * landing point, because the folder they referred to is not coming with them.
  */
 export function planTransfer(
-  source: Pick<
-    WorkspaceRecord,
-    "files" | "folders" | "saved" | "highlights" | "notes" | "scratchpads"
-  >,
+  source: Pick<WorkspaceRecord, "files" | "folders" | "saved" | "scratchpads">,
   destination: Pick<WorkspaceRecord, "files" | "folders">,
   selection: TransferSelection,
   destinationParentId: string | null = null,
@@ -183,12 +175,6 @@ export function planTransfer(
   const saved = (source.saved ?? [])
     .filter((item) => fileIdMap.has(item.fileId))
     .map((item) => ({ ...item, fileId: fileIdMap.get(item.fileId)! }));
-  const highlights = (source.highlights ?? [])
-    .filter((item) => fileIdMap.has(item.fileId))
-    .map((item) => ({ ...item, fileId: fileIdMap.get(item.fileId)! }));
-  const notes = (source.notes ?? [])
-    .filter((item) => fileIdMap.has(item.fileId))
-    .map((item) => ({ ...item, fileId: fileIdMap.get(item.fileId)! }));
   const scratchpads = (source.scratchpads ?? [])
     .filter((pad) => pad.fileId !== null && fileIdMap.has(pad.fileId))
     .map((pad) => ({ ...pad, fileId: fileIdMap.get(pad.fileId!)! }));
@@ -197,8 +183,6 @@ export function planTransfer(
     files,
     folders,
     saved,
-    highlights,
-    notes,
     scratchpads,
     removeFileIds: new Set(movingFiles.map((file) => file.id)),
     removeFolderIds: movingFolderIds,
@@ -211,7 +195,6 @@ export function transferCounts(plan: TransferPlan): TransferCounts {
     files: plan.files.length,
     folders: plan.folders.length,
     saved: plan.saved.length,
-    highlights: plan.highlights.length,
   };
 }
 
@@ -233,8 +216,6 @@ export function applyToDestination(
     files,
     folders: [...(destination.folders ?? []), ...plan.folders],
     saved: [...(destination.saved ?? []), ...plan.saved],
-    highlights: [...(destination.highlights ?? []), ...plan.highlights],
-    notes: [...(destination.notes ?? []), ...plan.notes],
     scratchpads: [...(destination.scratchpads ?? []), ...plan.scratchpads],
     ui: {
       ...destination.ui,
@@ -251,18 +232,13 @@ export function applyToDestination(
 
 /** What is left of the source once the moved records are gone. */
 export function removeFromSource<
-  T extends Pick<
-    WorkspaceRecord,
-    "files" | "folders" | "saved" | "highlights" | "notes" | "scratchpads"
-  >,
+  T extends Pick<WorkspaceRecord, "files" | "folders" | "saved" | "scratchpads">,
 >(source: T, plan: TransferPlan): T {
   return {
     ...source,
     files: source.files.filter((file) => !plan.removeFileIds.has(file.id)),
     folders: (source.folders ?? []).filter((folder) => !plan.removeFolderIds.has(folder.id)),
     saved: (source.saved ?? []).filter((item) => !plan.removeFileIds.has(item.fileId)),
-    highlights: (source.highlights ?? []).filter((item) => !plan.removeFileIds.has(item.fileId)),
-    notes: (source.notes ?? []).filter((item) => !plan.removeFileIds.has(item.fileId)),
     scratchpads: (source.scratchpads ?? []).filter(
       (pad) => pad.fileId === null || !plan.removeFileIds.has(pad.fileId),
     ),

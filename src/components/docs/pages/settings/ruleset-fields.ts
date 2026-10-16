@@ -3,8 +3,9 @@ import { z } from "zod";
 export const fieldLabel = (key: string) =>
   ({
     questionTimeLimitSeconds: "Time per question (seconds)",
-    showElapsedTime: "Show solve time",
-    allowSkip: "Allow skipping",
+    showElapsedTime: "Show question timer",
+    showProgress: "Show progress bar",
+    pauseOnTabLeave: "Pause when leaving the tab",
     name: "Name",
     mcq: "MCQ",
     msq: "MSQ",

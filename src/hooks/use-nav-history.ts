@@ -1,3 +1,4 @@
+import { useLocation, useRouter } from "@tanstack/react-router";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 /**
@@ -20,7 +21,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
  */
 
 export interface NavEntry {
-  /** Route path — "/" for the reader, "/settings" for settings. */
+  /** Address of a workspace, document or settings section. */
   path: string;
   /** Open document, when the entry is a reader view. */
   fileId: string | null;
@@ -28,8 +29,6 @@ export interface NavEntry {
   headingId: string | null;
   /** Search term the document was opened with, so back restores highlighting. */
   query: string | null;
-  /** Scroll offset, captured when we navigate away from this entry. */
-  scrollY: number;
 }
 
 /**
@@ -52,8 +51,6 @@ export const ESCAPE_DEPTH = {
   /** A modal, dialog, or full overlay taking the whole screen. */
   overlay: 30,
 } as const;
-
-const MAX_ENTRIES = 100;
 
 export interface NavHistory {
   canBack: boolean;
@@ -90,174 +87,99 @@ const NOOP_HISTORY: NavHistory = {
   popEscape: () => false,
 };
 
-function sameEntry(a: NavEntry, b: NavEntry) {
-  return (
-    a.path === b.path && a.fileId === b.fileId && a.headingId === b.headingId && a.query === b.query
-  );
-}
-
-function normalize(entry: Partial<NavEntry>): NavEntry {
-  return {
-    path: entry.path ?? "/",
-    fileId: entry.fileId ?? null,
-    headingId: entry.headingId ?? null,
-    query: entry.query ?? null,
-    scrollY: entry.scrollY ?? 0,
-  };
-}
-
-/**
- * The trail outlives the component that owns it.
- *
- * Settings is a separate route, so moving to it unmounts the app shell and
- * takes any in-memory stack with it — which is exactly the moment back matters
- * most, and why settings used to offer a hardcoded link home instead. Session
- * storage is the right shape for this: per-tab, cleared when the tab closes,
- * and never shared between two windows onto the same workspace.
- */
-const STORAGE_KEY = "localdox:nav-history";
-
-function loadTrail(): { stack: NavEntry[]; index: number } {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return { stack: [], index: -1 };
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed?.stack) || typeof parsed?.index !== "number") {
-      return { stack: [], index: -1 };
-    }
-    return { stack: parsed.stack.map(normalize), index: parsed.index };
-  } catch {
-    return { stack: [], index: -1 };
-  }
-}
-
-function saveTrail(stack: NavEntry[], index: number) {
-  try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ stack, index }));
-  } catch {
-    /* private mode, quota — the trail is a convenience, not state to protect */
-  }
-}
-
-/**
- * Owns the trail. `apply` is how the history moves the app: it is handed an
- * entry and puts the app into that state. Applying is flagged while it runs so
- * the resulting state change does not push a new entry and erase the future.
- */
+/** Browser history is the single navigation trail; overlays can still dismiss first. */
 export function useNavHistoryState({
-  apply,
-  captureScroll,
+  resolvePath,
 }: {
-  apply: (entry: NavEntry) => void;
-  captureScroll: () => number;
+  resolvePath: (entry: Partial<NavEntry>) => string;
 }): NavHistory {
-  const restored = useRef(loadTrail());
-  const [stack, setStack] = useState<NavEntry[]>(restored.current.stack);
-  const [index, setIndex] = useState(restored.current.index);
-  const escapesRef = useRef<NavEscape[]>([]);
+  const router = useRouter();
+  const location = useLocation();
+  const index = location.state.__TSR_index ?? 0;
+  const [furthest, setFurthest] = useState(index);
+  const escapes = useRef<NavEscape[]>([]);
   const [escapeCount, setEscapeCount] = useState(0);
-  const applyingRef = useRef(false);
-  const stackRef = useRef(stack);
-  const indexRef = useRef(index);
-  stackRef.current = stack;
-  indexRef.current = index;
+  const resolver = useRef(resolvePath);
+  resolver.current = resolvePath;
 
   useEffect(() => {
-    saveTrail(stack, index);
-  }, [stack, index]);
+    // Remember available forward entries across a reload without owning a second trail.
+    // Keys distinguish this browser history from a fresh navigation into the app.
+    const storageKey = "localdox:browser-history-extent";
+    let keys: Record<string, string> = {};
+    const current = router.history.location;
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "{}");
+      if (
+        saved &&
+        typeof saved === "object" &&
+        saved[current.state.__TSR_index] === current.state.__TSR_key
+      )
+        keys = saved;
+    } catch {
+      /* History works even when session storage is unavailable. */
+    }
+    const record = (next: typeof current, pushed = false) => {
+      const nextIndex = next.state.__TSR_index ?? 0;
+      if (pushed) {
+        for (const key of Object.keys(keys)) if (Number(key) > nextIndex) delete keys[key];
+      }
+      if (next.state.__TSR_key) keys[nextIndex] = next.state.__TSR_key;
+      setFurthest(Math.max(nextIndex, ...Object.keys(keys).map(Number).filter(Number.isFinite)));
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify(keys));
+      } catch {
+        /* optional */
+      }
+    };
+    record(current);
+    return router.history.subscribe(({ location: next, action }) =>
+      record(next, action.type === "PUSH"),
+    );
+  }, [router]);
 
   const registerEscape = useCallback((escape: NavEscape) => {
-    escapesRef.current = [...escapesRef.current, escape];
-    setEscapeCount(escapesRef.current.length);
+    escapes.current = [...escapes.current, escape];
+    setEscapeCount(escapes.current.length);
     return () => {
-      escapesRef.current = escapesRef.current.filter((item) => item.id !== escape.id);
-      setEscapeCount(escapesRef.current.length);
+      escapes.current = escapes.current.filter((item) => item.id !== escape.id);
+      setEscapeCount(escapes.current.length);
     };
   }, []);
-
   const popEscape = useCallback(() => {
-    const escapes = escapesRef.current;
-    if (escapes.length === 0) return false;
-    // Innermost first; among equals, the most recently opened.
-    const target = escapes.reduce((best, item) => (item.depth >= best.depth ? item : best));
-    target.close();
+    if (!escapes.current.length) return false;
+    escapes.current.reduce((best, item) => (item.depth >= best.depth ? item : best)).close();
     return true;
   }, []);
-
   const push = useCallback(
-    (partial: Partial<NavEntry>) => {
-      if (applyingRef.current) return;
-      const entry = normalize(partial);
-      const current = stackRef.current[indexRef.current];
-      if (current && sameEntry(current, entry)) return;
-
-      setStack((prev) => {
-        // Remember where we were leaving from, so back returns to the same place
-        // in the document rather than to its top.
-        const trimmed = prev.slice(0, indexRef.current + 1);
-        if (trimmed.length > 0) {
-          trimmed[trimmed.length - 1] = {
-            ...trimmed[trimmed.length - 1],
-            scrollY: captureScroll(),
-          };
-        }
-        const next = [...trimmed, entry];
-        // Cap the trail. Dropping from the front keeps recent history intact.
-        const overflow = Math.max(0, next.length - MAX_ENTRIES);
-        const capped = next.slice(overflow);
-        setIndex(capped.length - 1);
-        return capped;
+    (entry: Partial<NavEntry>) => {
+      const path = resolver.current(entry);
+      const hash = entry.headingId && entry.headingId !== "preamble" ? entry.headingId : "";
+      const href = `${path}${hash ? `#${encodeURIComponent(hash)}` : ""}`;
+      if (router.state.location.href === href) return;
+      void router.navigate({
+        to: path,
+        hash,
+        resetScroll: false,
+        state: (previous) => ({ ...previous, localdoxQuery: entry.query ?? null }),
       });
     },
-    [captureScroll],
+    [router],
   );
-
-  const go = useCallback(
-    (delta: number) => {
-      const target = indexRef.current + delta;
-      const entry = stackRef.current[target];
-      if (!entry) return;
-
-      // Leaving the current entry: save where we are in it first.
-      const scrollY = captureScroll();
-      setStack((prev) =>
-        prev.map((item, i) => (i === indexRef.current ? { ...item, scrollY } : item)),
-      );
-
-      applyingRef.current = true;
-      setIndex(target);
-      apply(entry);
-      // Released after the state changes `apply` triggered have flushed, so
-      // none of them are mistaken for a new navigation.
-      queueMicrotask(() => {
-        applyingRef.current = false;
-      });
-    },
-    [apply, captureScroll],
-  );
-
   const back = useCallback(() => {
-    // A mode or panel is open: back leaves that, not the document.
-    if (popEscape()) return;
-    go(-1);
-  }, [go, popEscape]);
-
-  const forward = useCallback(() => go(1), [go]);
-
-  // Referenced so the labels recompute when a mode opens or closes.
-  void escapeCount;
-  const hasEscape = escapesRef.current.length > 0;
-
+    if (!popEscape()) router.history.back();
+  }, [router, popEscape]);
+  const forward = useCallback(() => router.history.forward(), [router]);
   return {
-    canBack: hasEscape || index > 0,
-    canForward: index >= 0 && index < stack.length - 1,
+    canBack: escapeCount > 0 || index > 0,
+    canForward: index < furthest,
     back,
     forward,
-    backLabel: hasEscape ? "Back (close)" : "Back",
-    forwardLabel: "Forward",
     push,
     registerEscape,
     popEscape,
+    backLabel: escapeCount > 0 ? "Back (close)" : "Back",
+    forwardLabel: "Forward",
   };
 }
 

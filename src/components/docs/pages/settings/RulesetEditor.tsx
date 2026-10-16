@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { z } from "zod";
 import { xruleSchema } from "@/services/exams/xrule";
+import { enforceStrictExamRules } from "@/services/exams/strict-rules";
 import { rulesetSchema } from "@/services/exams/schema";
 import { DEFAULT_SETUP, GATE_RULESET } from "@/services/exams/exam-setup";
 import { DEFAULT_PRACTICE_RULES, practiceRulesSchema } from "@/services/exams/practice-rules";
@@ -79,7 +80,7 @@ export function RulesetEditor({
             diagnostics: { enabled: false },
             ui: { profile: "generic" },
           });
-    const next: Record<string, unknown> = { ...raw, rules };
+    const next: Record<string, unknown> = { ...raw, rules: enforceStrictExamRules(rules) };
     delete next.preset;
     delete next.mcqPenalty;
     delete next.calculator;
@@ -170,9 +171,18 @@ export function RulesetEditor({
         />
       ) : raw ? (
         <>
-          <section aria-label="Primary rules" className="space-y-3">
-            <h4 className="text-sm font-semibold">Primary</h4>
-            <div className="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2">
+          <section aria-label="Primary rules" className="space-y-4">
+            {!practiceOnly && (
+              <>
+                <h4 className="text-sm font-semibold">Exam setup</h4>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Exams require fullscreen and Save & next. The timer cannot be paused. Copy, paste
+                  and right-click are disabled. Leaving fullscreen or the exam window triggers a
+                  warning; a third violation submits the exam. Stricter authored limits also apply.
+                </p>
+              </>
+            )}
+            <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2">
               {primary
                 .filter(
                   (key) =>
@@ -182,12 +192,9 @@ export function RulesetEditor({
                 .map(field)}
             </div>
             {raw.practice !== undefined && (
-              <div className="rounded-lg border border-border p-3 space-y-3">
+              <div className="space-y-4 border-t border-hairline pt-4">
                 <h4 className="text-sm font-medium">Practice</h4>
-                <p className="text-xs text-muted-foreground">
-                  One question at a time. A time limit advances automatically; solve times stay in
-                  this browser.
-                </p>
+
                 <RulesetField
                   schema={practiceRulesSchema.shape.questionTimeLimitSeconds}
                   label="Time per question (seconds)"
@@ -198,23 +205,27 @@ export function RulesetEditor({
                     patch("practice", { ...(raw.practice as object), questionTimeLimitSeconds: v })
                   }
                 />
+                {(["showElapsedTime", "showProgress"] as const).map((key) => (
+                  <RulesetField
+                    key={key}
+                    schema={practiceRulesSchema.shape[key]}
+                    label={fieldLabel(key)}
+                    value={(raw.practice as Record<string, unknown>)?.[key] ?? true}
+                    onChange={(v) => patch("practice", { ...(raw.practice as object), [key]: v })}
+                  />
+                ))}
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Practice pauses automatically when you leave the tab or window and resumes when
+                  you return.
+                </p>
               </div>
             )}
           </section>
-          <details className="rounded-lg border border-border p-3">
+          <details className="border-t border-hairline pt-4">
             <summary className="cursor-pointer text-sm font-medium">Advanced</summary>
             <div className="mt-4 space-y-4">
               {raw.practice !== undefined ? (
                 <>
-                  {["showElapsedTime", "allowSkip"].map((key) => (
-                    <RulesetField
-                      key={key}
-                      schema={practiceRulesSchema.shape[key as "showElapsedTime" | "allowSkip"]}
-                      label={fieldLabel(key)}
-                      value={(raw.practice as Record<string, unknown>)?.[key] ?? true}
-                      onChange={(v) => patch("practice", { ...(raw.practice as object), [key]: v })}
-                    />
-                  ))}
                   <button
                     type="button"
                     className={button}

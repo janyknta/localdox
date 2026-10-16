@@ -8,6 +8,14 @@
  * the reader to leave the editor.
  */
 const open = new Map<string, number>();
+const writers = new Map<string, { read: () => string; rewrite: (transform: (text: string) => string) => void }>();
+
+export function registerEditorWriter(fileId: string, writer: { read: () => string; rewrite: (transform: (text: string) => string) => void }) {
+  writers.set(fileId, writer);
+  return () => { if (writers.get(fileId) === writer) writers.delete(fileId); };
+}
+export const readOpenEditor = (fileId: string) => writers.get(fileId)?.read();
+export const rewriteOpenEditor = (fileId: string, transform: (text: string) => string) => writers.get(fileId)?.rewrite(transform);
 
 /** Record an editor open on `fileId`; the returned function closes it. */
 export function markEditorOpen(fileId: string): () => void {

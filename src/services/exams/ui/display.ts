@@ -1,5 +1,5 @@
 /**
- * Presentation rules for Exam Workspaces: formats, copy and derived view state.
+ * Presentation rules for exam sessions: formats, copy and derived view state.
  *
  * Everything here is pure and read-only over the engine's data. Nothing in this
  * file may change grading, timing, attempts or integrity; it only decides how
@@ -213,7 +213,9 @@ export function markingCards(r: Ruleset, paper: Question[]): MarkingCard[] {
 /** Plain sentences for the integrity and timing rules (at most three). */
 export function ruleSentences(r: Ruleset): string[] {
   const i = r.integrity,
-    leaving = i.requireFullscreen ? "Leaving fullscreen or switching tabs" : "Switching tabs";
+    leaving = i.requireFullscreen
+      ? "Leaving fullscreen or the exam window"
+      : "Leaving the exam window";
   const integrity =
     i.onViolation === "autosubmit"
       ? `${leaving} submits your exam immediately.`
@@ -289,7 +291,9 @@ export function answeringSteps(r: Ruleset): string[] {
 }
 /** Violation notice: "Warning 1 of 3: stay in fullscreen." */
 export function violationCopy(r: Ruleset, violations: number): string {
-  const what = r.integrity.requireFullscreen ? "stay in fullscreen" : "stay on this tab";
+  const what = r.integrity.requireFullscreen
+    ? "stay in fullscreen and in the exam window"
+    : "stay in the exam window";
   return r.integrity.onViolation === "warn_then_autosubmit" && r.integrity.maxTabSwitches !== null
     ? `Warning ${violations} of ${r.integrity.maxTabSwitches}: ${what}.`
     : `Warning ${violations}: ${what}.`;

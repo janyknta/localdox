@@ -1,6 +1,6 @@
 import { Button as AppButton } from "@/components/ui/button";
 /**
- * The Exam Workspaces component kit. Small, unopinionated wrappers over the
+ * The exam sessions component kit. Small, unopinionated wrappers over the
  * `ex-` classes in exams.css. Build screens from these, not from raw classes,
  * so focus rings, target sizes and states stay consistent.
  */

@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { z } from "zod";
+import { Dropdown } from "@/components/ui/dropdown";
 
 import { fieldLabel, seed, unwrap } from "./ruleset-fields";
 
@@ -82,28 +83,26 @@ export function RulesetField({
     );
     control = (
       <div className="space-y-2">
-        <select
+        <Dropdown
           id={id}
           aria-label={`${path} format`}
-          className={inputClass}
-          value={index}
-          onChange={(e) => onChange(seed(options[Number(e.target.value)]))}
-        >
-          {options.map((s, i) => {
+          value={String(index)}
+          onValueChange={(value) => onChange(seed(options[Number(value)]))}
+          options={options.map((s, i) => {
             const t = unwrap(s);
-            return (
-              <option key={i} value={i}>
-                {t instanceof z.ZodObject
+            return {
+              value: String(i),
+              label:
+                t instanceof z.ZodObject
                   ? Object.keys(t.shape).map(fieldLabel).join(" / ")
                   : t instanceof z.ZodArray
                     ? "List"
                     : t instanceof z.ZodNull
                       ? "None"
-                      : t._def.typeName.replace("Zod", "")}
-              </option>
-            );
+                      : t._def.typeName.replace("Zod", ""),
+            };
           })}
-        </select>
+        />
         {!(unwrap(options[index]) instanceof z.ZodNull) &&
           children(options[index], value, onChange, "Value", String(index))}
       </div>
@@ -159,19 +158,13 @@ export function RulesetField({
     );
   else if (type instanceof z.ZodEnum)
     control = (
-      <select
+      <Dropdown
         id={id}
         aria-label={path}
-        className={inputClass}
         value={String(value ?? type.options[0])}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {type.options.map((v: string) => (
-          <option key={v} value={v}>
-            {fieldLabel(v)}
-          </option>
-        ))}
-      </select>
+        onValueChange={onChange}
+        options={type.options.map((v: string) => ({ value: v, label: fieldLabel(v) }))}
+      />
     );
   else if (type instanceof z.ZodNumber)
     control = (

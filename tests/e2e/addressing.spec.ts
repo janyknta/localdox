@@ -1,8 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // Source addressing end to end: rendered blocks carry their file spans, and
-// search hits, Inspect source and note links all land on the exact occurrence
-// — including inside table cells and diagrams, where counting rendered text
+// search hits and Inspect source land on the exact occurrence (and a note's
+// link on the note's own fence) — including inside table cells and diagrams, where counting rendered text
 // used to land on the first occurrence in the document instead.
 
 const DOC = [
@@ -25,6 +25,27 @@ const DOC = [
 ].join("\n");
 
 type Registry = { highlights: Map<string, Iterable<Range>> };
+
+/** guide.md's Markdown as IndexedDB holds it: notes are fences in it. */
+function storedContent(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<string | null>((resolve, reject) => {
+        const request = indexedDB.open("localdox");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result;
+          const all = db.transaction("files").objectStore("files").getAll();
+          all.onerror = () => reject(all.error);
+          all.onsuccess = () => {
+            db.close();
+            const rows = all.result as Array<{ name: string; content: string }>;
+            resolve(rows.find((row) => row.name === "guide.md")?.content ?? null);
+          };
+        };
+      }),
+  );
+}
 
 async function open(page: Page, content = DOC) {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -168,31 +189,54 @@ test("Inspect source selects exactly the occurrence that was selected", async ({
     .toEqual({ text: "widget", line: "| widget | the widget cell |" });
 });
 
-test("a note's link lands on its own occurrence, even after the document is edited above it", async ({
+test("a note's link lands on the note itself, even after the document is edited above it", async ({
   page,
 }) => {
   await open(page);
+  // The second of two identical sentences: the note is written after it, at
+  // the end of the document, and its text is that same sentence again.
   const sentence = "The same sentence appears twice.";
   await select(page, sentence, 1);
   await page.getByRole("button", { name: "Copy selection to notes" }).click();
   await page.getByRole("button", { name: "Notes", exact: true }).click();
   const panel = page.getByRole("region", { name: "Notes panel" });
   await expect(panel.getByRole("listitem")).toHaveCount(1);
+  const note = page.locator("article").getByRole("note", { name: "Note", exact: true });
+  await expect(note).toHaveCount(1);
 
   // Edit the document: a new paragraph above everything shifts every offset.
+  // The note is part of the source, so it moves with the text around it.
+  const withNote = `${DOC}\n\n\`\`\`note\n${sentence}\n\`\`\`\n`;
+  await expect.poll(() => storedContent(page)).toBe(withNote);
   await page.getByRole("button", { name: "Edit", exact: true }).click();
-  await page
-    .locator("#markdown-source")
-    .fill(DOC.replace("# Guide\n", "# Guide\n\nA new opening paragraph, added later.\n"));
+  const source = page.locator("#markdown-source");
+  const edited = withNote.replace(
+    "# Guide\n",
+    "# Guide\n\nA new opening paragraph, added later.\n",
+  );
+  await source.fill(edited);
   await page.getByRole("button", { name: /Done/ }).click();
   await expect(page.getByText("A new opening paragraph, added later.")).toBeVisible();
+  await expect.poll(() => storedContent(page)).toBe(edited);
 
   await page.evaluate(() => (CSS as unknown as Registry).highlights.delete("dc-saved-flash"));
-  await panel.getByRole("button", { name: /^guide\.md/ }).click();
+  await panel.getByRole("button", { name: "Go to this note in guide.md", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  // The note's own text, inside its card — not either copy of the sentence
+  // in the document.
   expect(await flashed(page)).toEqual({
     text: sentence,
     cell: null,
     inDiagram: false,
-    block: "Closing widget line. The same sentence appears twice.",
+    block: sentence,
   });
+  expect(
+    await page.evaluate(() => {
+      const range = [
+        ...((CSS as unknown as Registry).highlights.get("dc-saved-flash") ?? []),
+      ][0] as Range;
+      const card = range.startContainer.parentElement!.closest(".docs-annotation");
+      return card?.previousElementSibling?.textContent?.trim() ?? null;
+    }),
+  ).toBe("Closing widget line. The same sentence appears twice.");
 });

@@ -12,6 +12,7 @@ export type PracticeAnswers = Record<string, PracticeAnswer>;
 const generations = new Map<string, number>();
 export const practiceGeneration = (fileId: string) => generations.get(fileId) ?? 0;
 const answersKey = (fileId: string) => `localdox:practice-answers:${fileId}`;
+const sessionKey = (fileId: string) => `localdox:practice-session:${fileId}`;
 const timesKey = (fileId: string) => `localdox:practice-times:${fileId}`;
 
 function read(key: string): Record<string, unknown> {
@@ -74,6 +75,7 @@ export function clearPracticeProgress(fileId: string) {
   generations.set(fileId, practiceGeneration(fileId) + 1);
   write(answersKey(fileId), {});
   write(timesKey(fileId), {});
+  write(sessionKey(fileId), {});
 }
 /** A question or answer-key edit retires both the answer and its timing. */
 export function practiceSignature(q: Question, s: Solution): string {
@@ -87,4 +89,65 @@ export function practiceSignature(q: Question, s: Solution): string {
 export function formatPracticeTime(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+export interface PracticeSession {
+  signature: string;
+  currentId: string;
+  phase: "running" | "paused" | "ended";
+  drafts: Record<string, Response>;
+}
+export function loadPracticeSession(fileId: string, signature: string): PracticeSession | null {
+  const value = read(sessionKey(fileId));
+  if (
+    value.signature !== signature ||
+    typeof value.currentId !== "string" ||
+    !["running", "paused", "ended"].includes(String(value.phase))
+  )
+    return null;
+  const drafts =
+    value.drafts && typeof value.drafts === "object" && !Array.isArray(value.drafts)
+      ? Object.fromEntries(
+          Object.entries(value.drafts).filter(
+            ([, v]) =>
+              v === null ||
+              typeof v === "string" ||
+              (Array.isArray(v) && v.every((item) => typeof item === "string")),
+          ),
+        )
+      : {};
+  return {
+    signature,
+    currentId: value.currentId,
+    phase: value.phase as PracticeSession["phase"],
+    drafts,
+  };
+}
+export function savePracticeSession(
+  fileId: string,
+  session: PracticeSession,
+  generation = practiceGeneration(fileId),
+) {
+  if (generation === practiceGeneration(fileId)) write(sessionKey(fileId), session);
+}
+
+export const PRACTICE_ACTION_EVENT = "localdox:practice-action";
+export interface PracticeAction {
+  fileId: string;
+  action: "reset" | "end";
+}
+/** Settings can manage any practice file, including one whose reader is mounted behind the modal. */
+export function managePracticeSession(fileId: string, action: PracticeAction["action"]) {
+  if (action === "reset") clearPracticeProgress(fileId);
+  else {
+    const value = read(sessionKey(fileId));
+    if (typeof value.signature === "string") {
+      const session = loadPracticeSession(fileId, value.signature);
+      if (session) savePracticeSession(fileId, { ...session, phase: "ended" });
+    }
+  }
+  if (typeof window !== "undefined")
+    window.dispatchEvent(
+      new CustomEvent<PracticeAction>(PRACTICE_ACTION_EVENT, { detail: { fileId, action } }),
+    );
 }

@@ -1,3 +1,4 @@
+import { useBlocker } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert } from "lucide-react";
 import type { MdFile } from "@/lib/markdown/markdown-utils";
@@ -75,7 +76,7 @@ const TEMPLATES: Record<RulesTemplate, { label: string; name: string; hint: stri
   gate: {
     label: "GATE",
     name: "GATE mock",
-    hint: "The GATE pattern: 65 questions in General Aptitude and Subject sections, 3 hours, −1/3 for a wrong MCQ, NAT keypad, scientific calculator, answers kept only with Save & next. Tag each question section=GA or section=subject. For a shorter mock, lower questionCount and durationMinutes.",
+    hint: "65 questions, 3 hours, one-third negative marking for MCQs and a scientific calculator.",
   },
 };
 const quiet =
@@ -90,6 +91,7 @@ const quiet =
 export function ExamRulesSettings({
   files,
   initialRulesId,
+  onOpenChange,
   onSave,
   onCreate,
   onBin,
@@ -97,6 +99,7 @@ export function ExamRulesSettings({
   files: MdFile[];
   /** Open on this ruleset, editing — a paper's "edit its rules". */
   initialRulesId?: string;
+  onOpenChange?: (id?: string) => void;
   onSave: (fileId: string, content: string) => void;
   onCreate: (name: string, template: RulesTemplate) => { id: string; name: string };
   onBin: (fileIds: string[]) => void;
@@ -105,6 +108,13 @@ export function ExamRulesSettings({
   const [loadError, setLoadError] = useState("");
   const [openId, setOpenId] = useState(initialRulesId ?? null);
   const [naming, setNaming] = useState<string | null>(null);
+  useEffect(() => {
+    setOpenId(initialRulesId ?? null);
+  }, [initialRulesId]);
+  const open = (id?: string) => {
+    if (onOpenChange) onOpenChange(id);
+    else setOpenId(id ?? null);
+  };
   const [template, setTemplate] = useState<RulesTemplate>("default");
 
   useEffect(() => {
@@ -147,7 +157,7 @@ export function ExamRulesSettings({
   const create = () => {
     const name = naming?.trim();
     if (!name) return;
-    setOpenId(onCreate(name, template).id);
+    open(onCreate(name, template).id);
     setNaming(null);
   };
   const startNaming = (from: RulesTemplate) => {
@@ -160,11 +170,42 @@ export function ExamRulesSettings({
     setTemplate(next);
   };
 
+  const selected = rulesets.find((file) => file.id === openId);
+  if (selected)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <button
+          type="button"
+          onClick={() => open()}
+          className={`${quiet} self-start text-left text-muted-foreground hover:bg-accent`}
+        >
+          ← All rulesets
+        </button>
+        <RulesetRow
+          key={selected.id}
+          file={selected}
+          used={uses.get(selected.name)?.exams ?? 0}
+          practiceUsed={uses.get(selected.name)?.practice ?? 0}
+          check={check}
+          startOpen
+          onSave={onSave}
+          onBin={onBin}
+          onOpen={() => open(selected.id)}
+          onClose={() => open()}
+        />
+      </div>
+    );
+
   return (
     <div className="space-y-5">
+      {initialRulesId && !selected && (
+        <p role="alert" className="text-sm text-destructive">
+          This ruleset is not available in this workspace. Choose another ruleset.
+        </p>
+      )}
       <Section
         title="Rulesets"
-        description="Shared rules for exams and practice. Edit with the form or JSON; save when ready."
+        description="Choose a ruleset to edit, or create one."
         action={
           naming === null && (
             <button
@@ -263,6 +304,8 @@ export function ExamRulesSettings({
                 startOpen={file.id === openId}
                 onSave={onSave}
                 onBin={onBin}
+                onOpen={() => open(file.id)}
+                onClose={() => open()}
               />
             ))
           )}
@@ -283,6 +326,8 @@ function RulesetRow({
   practiceUsed,
   check,
   startOpen,
+  onOpen,
+  onClose,
   onSave,
   onBin,
 }: {
@@ -291,11 +336,34 @@ function RulesetRow({
   practiceUsed: number;
   check: Checker | null;
   startOpen: boolean;
+  onOpen: () => void;
+  onClose: () => void;
   onSave: (fileId: string, content: string) => void;
   onBin: (fileIds: string[]) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(startOpen ? file.content : null);
   const rowRef = useRef<HTMLDivElement>(null);
+  const leaving = useRef(false);
+  useBlocker({
+    enableBeforeUnload: () => draft !== null && draft !== file.content,
+    shouldBlockFn: ({ current, next }) =>
+      !leaving.current &&
+      draft !== null &&
+      draft !== file.content &&
+      current.pathname !== next.pathname &&
+      !window.confirm("Discard unsaved ruleset changes?"),
+  });
+  const cancel = () => {
+    leaving.current = true;
+    onClose();
+  };
+  const save = () => {
+    if (!drafted?.ok || draft === null) return;
+    leaving.current = true;
+    if (draft !== file.content) onSave(file.id, draft);
+    onClose();
+  };
+
   const saved = useMemo(() => check?.(file.content, file.name), [check, file.content, file.name]);
   const drafted = useMemo(
     () => (draft === null ? undefined : check?.(draft, file.name)),
@@ -329,32 +397,40 @@ function RulesetRow({
   };
 
   return (
-    <div ref={rowRef} data-ruleset={file.name}>
+    <div
+      ref={rowRef}
+      data-ruleset={file.name}
+      className={startOpen ? "flex min-h-0 flex-1 flex-col" : undefined}
+    >
       <Row
         label={title}
         hint={
-          <>
+          draft === null ? (
+            <>
+              <span className="font-mono">{file.name}</span>
+              {" · "}
+              {saved === undefined ? (
+                "Checking…"
+              ) : saved.ok ? (
+                <span className="tabular-nums">{saved.facts.join(" · ")}</span>
+              ) : (
+                <span className="text-destructive">
+                  {plural(saved.problems.length, "problem")} to fix
+                </span>
+              )}
+              {" · "}
+              {usedText}
+            </>
+          ) : (
             <span className="font-mono">{file.name}</span>
-            {" · "}
-            {saved === undefined ? (
-              "Checking…"
-            ) : saved.ok ? (
-              <span className="tabular-nums">{saved.facts.join(" · ")}</span>
-            ) : (
-              <span className="text-destructive">
-                {plural(saved.problems.length, "problem")} to fix
-              </span>
-            )}
-            {" · "}
-            {usedText}
-          </>
+          )
         }
         control={
           draft === null && (
             <>
               <button
                 type="button"
-                onClick={() => setDraft(file.content)}
+                onClick={onOpen}
                 aria-label={`Edit ${title}`}
                 className={`${quiet} text-foreground hover:bg-accent`}
               >
@@ -373,43 +449,37 @@ function RulesetRow({
         }
       />
       {draft !== null && (
-        <div className="space-y-2 px-4 pb-4">
-          <Suspense fallback={<p className="text-xs text-muted-foreground">Loading editor…</p>}>
-            <RulesetEditor
-              draft={draft}
-              onChange={setDraft}
-              name={file.name}
-              onCancel={() => setDraft(null)}
-              onSave={() => {
-                if (!drafted?.ok) return;
-                if (draft !== file.content) onSave(file.id, draft);
-                setDraft(null);
-              }}
-            />
-          </Suspense>
-          {drafted && !drafted.ok ? (
-            <div role="alert" className="text-xs text-destructive">
-              <p className="flex items-center gap-1.5 font-medium">
-                <CircleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                {drafted.problems.length === 1
-                  ? "One thing to fix before these rules run"
-                  : `${drafted.problems.length} things to fix before these rules run`}
-              </p>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-foreground">
-                {drafted.problems.slice(0, 6).map((problem, i) => (
-                  <li key={i}>{problem}</li>
-                ))}
-              </ul>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground" aria-live="polite">
-              {drafted?.ok ? drafted.facts.join(" · ") : "Checking…"}
-            </p>
-          )}
-          <div className="flex justify-end gap-1.5">
+        <div className="flex min-h-0 flex-1 flex-col border-t border-hairline">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto py-5 pr-1">
+            <Suspense fallback={<p className="text-xs text-muted-foreground">Loading editor…</p>}>
+              <RulesetEditor
+                draft={draft}
+                onChange={setDraft}
+                name={file.name}
+                onCancel={cancel}
+                onSave={save}
+              />
+            </Suspense>
+            {drafted && !drafted.ok ? (
+              <div role="alert" className="text-xs text-destructive">
+                <p className="flex items-center gap-1.5 font-medium">
+                  <CircleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  {drafted.problems.length === 1
+                    ? "One thing to fix before these rules run"
+                    : `${drafted.problems.length} things to fix before these rules run`}
+                </p>
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-foreground">
+                  {drafted.problems.slice(0, 6).map((problem, i) => (
+                    <li key={i}>{problem}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 justify-end gap-2 border-t border-hairline bg-background pt-3">
             <button
               type="button"
-              onClick={() => setDraft(null)}
+              onClick={cancel}
               className={`${quiet} text-muted-foreground hover:bg-accent hover:text-foreground`}
             >
               Cancel
@@ -417,10 +487,7 @@ function RulesetRow({
             <button
               type="button"
               disabled={!drafted?.ok}
-              onClick={() => {
-                if (draft !== file.content) onSave(file.id, draft);
-                setDraft(null);
-              }}
+              onClick={save}
               className={`${quiet} bg-foreground text-background hover:opacity-90`}
             >
               Save

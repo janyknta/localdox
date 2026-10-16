@@ -1,12 +1,16 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type ComponentPropsWithoutRef } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { FolderRecord } from "@/lib/workspace/persistence";
 import { isLocalReference, isArtifactUrl } from "@/lib/markdown/media-references";
 import { MarkdownMedia } from "./MarkdownMedia";
 import { remarkMedia, mediaUrlTransform, parseMediaSpec } from "@/lib/markdown/markdown-media";
 import type { MdFile } from "@/lib/markdown/markdown-utils";
 import { getDocumentKind } from "@/lib/markdown/document-utils";
+import { noteEmbedContent, isNoteUrl, noteReference } from "@/lib/markdown/note-links";
+import { useMarkdownPlugins } from "@/lib/markdown/markdown-plugins";
+import { MathProvider, useMathContext } from "@/services/math/MathContext";
+import { MATH_COMPONENTS } from "@/services/math/components";
+import { ConnectedLink } from "./markdown-viewer/ConnectedLink";
 import { binaryBody } from "@/lib/workspace/binary";
 import { useBinaryUrl } from "@/hooks/use-binary-url";
 const DocumentViewer = lazy(() =>
@@ -14,6 +18,7 @@ const DocumentViewer = lazy(() =>
 );
 import { MermaidBlock } from "@/services/diagrams";
 import { BoardEmbed } from "@/services/board";
+const EMBED_PLUGINS = [remarkMedia];
 import {
   prepareWorkspaceEmbeds,
   resolveWorkspaceArtifact,
@@ -85,8 +90,13 @@ export function InlineArtifact({
       </div>
     );
 
-  const { file } = artifact;
+  let { file } = artifact;
   const kind = file.kind ?? getDocumentKind(file.name, file.mimeType);
+  if (artifact.fragment && ["markdown", "text"].includes(kind)) {
+    const content = noteEmbedContent(file.content, artifact.fragment);
+    if (content === null) return <div className="artifact-error">Couldn't find {artifact.fragment} in {file.name}.</div>;
+    file = { ...file, content };
+  }
   const isPresentation = kind === "presentation";
   const isMermaid = kind === "mermaid";
   // A board brings its own framed, fixed-height viewport (it is a canvas, not a
@@ -165,12 +175,15 @@ function EmbeddedMarkdown({
   onOpenArtifact,
 }: { file: MdFile } & Omit<Props, "reference">) {
   const content = useMemo(() => prepareWorkspaceEmbeds(file.content), [file.content]);
+  const plugins = useMarkdownPlugins(content, EMBED_PLUGINS);
+  const { preferences } = useMathContext();
   return (
-    <article className="artifact-markdown docs-prose">
+    <MathProvider source={file.content} preferences={preferences}><article className="artifact-markdown docs-prose">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMedia]}
+        {...plugins}
         urlTransform={mediaUrlTransform}
         components={{
+          ...MATH_COMPONENTS,
           pre: (props: ComponentPropsWithoutRef<"pre">) => {
             const codeElement = Array.isArray(props.children) ? props.children[0] : props.children;
             if (
@@ -203,7 +216,7 @@ function EmbeddedMarkdown({
             />
           ),
           a: (props: ComponentPropsWithoutRef<"a">) =>
-            isLocalReference(props.href ?? "") || isArtifactUrl(props.href) ? (
+            isNoteUrl(props.href ?? "") ? <ConnectedLink reference={noteReference(props.href!)} sourceId={file.id}>{props.children}</ConnectedLink> : isLocalReference(props.href ?? "") || isArtifactUrl(props.href) ? (
               <MarkdownMedia
                 src={props.href ?? ""}
                 linkOnly
@@ -229,7 +242,7 @@ function EmbeddedMarkdown({
       >
         {content}
       </ReactMarkdown>
-    </article>
+    </article></MathProvider>
   );
 }
 

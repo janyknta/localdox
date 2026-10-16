@@ -48,6 +48,11 @@ export function BottomSheet({
           )}
         />
         <DialogPrimitive.Content
+          onInteractOutside={(event) => {
+            // Toast actions (such as Undo) remain usable without closing the sheet.
+            if (event.target instanceof Element && event.target.closest("[data-sonner-toast]"))
+              event.preventDefault();
+          }}
           className={cn(
             "fixed inset-x-0 bottom-0 z-(--z-modal) flex max-h-[88dvh] flex-col rounded-t-3xl border-t border-border bg-background shadow-2xl outline-none",
             "px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3",

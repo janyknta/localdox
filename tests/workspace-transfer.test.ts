@@ -1,11 +1,11 @@
 // Moving documents and folders between workspaces.
 //
-// A workspace is a closed world — file ids, folder ids, stars and highlights
-// only mean anything inside the record that holds them — so a move is a
-// transplant, and the ways it can quietly lose data are what these cover:
-// a folder's descendants left behind, an id collision overwriting a document
-// that was already there, and annotations dropped because they live beside the
-// files rather than inside them.
+// A workspace is a closed world — file ids, folder ids and stars only mean
+// anything inside the record that holds them — so a move is a transplant, and
+// the ways it can quietly lose data are what these cover: a folder's
+// descendants left behind, an id collision overwriting a document that was
+// already there, and stars dropped because they live beside the files rather
+// than inside them. (Highlights and notes are inside the files' Markdown.)
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -44,7 +44,6 @@ const workspace = (over: Partial<WorkspaceRecord> = {}): WorkspaceRecord => ({
   folders: [],
   bookmarks: [],
   saved: [],
-  highlights: [],
   ui: {
     activeFileId: null,
     expanded: {},
@@ -151,22 +150,23 @@ test("a colliding folder id is reassigned and its children follow the new id", (
 
 // --- annotations ---
 
-test("stars and highlights travel with their document", () => {
+test("stars travel with their document; highlights and notes ride in its content", () => {
   const source = workspace({
     files: [file("f1"), file("f2")],
     saved: [
       { id: "s1", fileId: "f1", kind: "file", title: "x", createdAt: 0 },
       { id: "s2", fileId: "f2", kind: "file", title: "y", createdAt: 0 },
     ],
-    highlights: [{ id: "h1", fileId: "f1", text: "t", color: "yellow" }],
   });
+  source.files[0].content = "# f1\n\nKey idea.\n\n```yellownote\nKey idea\n```\n\n```note\nMine.\n```\n";
   const plan = planTransfer(source, workspace(), { fileIds: ["f1"], folderIds: [] });
   assert.deepEqual(
     plan.saved.map((s) => s.id),
     ["s1"],
     "only the moved document's stars come across",
   );
-  assert.equal(plan.highlights.length, 1);
+  assert.equal(plan.files[0].content, source.files[0].content);
+  assert.ok(!("highlights" in plan) && !("notes" in plan));
 });
 
 test("annotations are rewritten when their file id is reassigned", () => {
@@ -176,13 +176,11 @@ test("annotations are rewritten when their file id is reassigned", () => {
   const source = workspace({
     files: [file("dup")],
     saved: [{ id: "s1", fileId: "dup", kind: "file", title: "x", createdAt: 0 }],
-    highlights: [{ id: "h1", fileId: "dup", text: "t", color: "yellow" }],
   });
   const destination = workspace({ files: [file("dup")] });
   const plan = planTransfer(source, destination, { fileIds: ["dup"], folderIds: [] });
   const newId = plan.files[0].id;
   assert.equal(plan.saved[0].fileId, newId);
-  assert.equal(plan.highlights[0].fileId, newId);
 });
 
 // --- applying ---
@@ -204,20 +202,18 @@ test("the source loses exactly what moved, and its annotations with it", () => {
       { id: "s1", fileId: "f1", kind: "file", title: "x", createdAt: 0 },
       { id: "s2", fileId: "stays", kind: "file", title: "y", createdAt: 0 },
     ],
-    highlights: [{ id: "h1", fileId: "f1", text: "t", color: "yellow" }],
   });
   const plan = planTransfer(source, workspace(), { fileIds: [], folderIds: ["a"] });
   const left = removeFromSource(source, plan);
   assert.deepEqual(left.files.map((f) => f.id), ["stays"]);
   assert.deepEqual(left.folders!.map((f) => f.id), ["keep"]);
   assert.deepEqual(left.saved!.map((s) => s.id), ["s2"], "the stayed file keeps its star");
-  assert.equal(left.highlights!.length, 0);
 });
 
 test("an empty selection moves nothing", () => {
   const source = workspace({ files: [file("f1")] });
   const plan = planTransfer(source, workspace(), { fileIds: [], folderIds: [] });
-  assert.deepEqual(transferCounts(plan), { files: 0, folders: 0, saved: 0, highlights: 0 });
+  assert.deepEqual(transferCounts(plan), { files: 0, folders: 0, saved: 0 });
   assert.deepEqual(removeFromSource(source, plan).files.map((f) => f.id), ["f1"]);
 });
 
@@ -284,5 +280,5 @@ test("counts describe what the reader is about to move", () => {
     saved: [{ id: "s1", fileId: "f1", kind: "file", title: "x", createdAt: 0 }],
   });
   const plan = planTransfer(source, workspace(), { fileIds: [], folderIds: ["a"] });
-  assert.deepEqual(transferCounts(plan), { files: 2, folders: 2, saved: 1, highlights: 0 });
+  assert.deepEqual(transferCounts(plan), { files: 2, folders: 2, saved: 1 });
 });

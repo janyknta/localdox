@@ -252,7 +252,6 @@ const archive = {
     ],
     bookmarks: [],
     saved: [],
-    highlights: [],
     ui: { activeFileId: "archived", expanded: {}, sidebarCollapsed: false, scrollTop: 0 },
   },
 };

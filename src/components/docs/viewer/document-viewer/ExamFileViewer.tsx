@@ -5,6 +5,7 @@ import { dataBlob } from "@/lib/workspace/binary";
 import { ExamMarkdown } from "@/services/exams/ExamMarkdown";
 import { optionLabel, parseExamFile, type Question } from "@/services/exams/parser";
 import { rulesFileFor, starterRules } from "@/services/exams/paper-plan";
+import { gateMockXruleTemplate } from "@/services/exams/templates";
 import { isRulesFile, rulesetTitle, withRulesTag } from "@/services/exams/rules-tag";
 import { TYPE_LABEL, trimNumber } from "@/services/exams/ui/display";
 // The renderer's tokens and figure styles; `.ex-portal` below carries them
@@ -31,16 +32,15 @@ const marksText = (n: number) => `${trimNumber(n)} mark${n === 1 ? "" : "s"}`;
 /**
  * An `.xam` file: an exam's questions, keys and solutions in Markdown.
  *
- * In an Exam Workspace the paper is sat: its rules, a Start button and its
- * attempts replace the preview. Elsewhere it previews as the questions it
+ * In a workspace the paper is sat: its rules, a Start button and its
+ * attempts replace the preview. Standalone previews show the questions it
  * asks. Either way the keys and solutions stay hidden: they are shown only in
  * the review of a submitted attempt. The source, through Edit, is the one
  * place they can be read, because it is the author's file.
  */
 export function ExamFileViewer(props: Props) {
   const { file, prevFile, nextFile, onNavFile, onContentChange, onOpenPalette } = props;
-  const context = useContext(ExamWorkspaceContext);
-  const workspace = context?.examEnabled ? context : null;
+  const workspace = useContext(ExamWorkspaceContext);
   const read = useCallback(
     (source: string) => readQuestions(() => parseExamFile(source, file.name)),
     [file.name],
@@ -99,8 +99,8 @@ export function ExamFileViewer(props: Props) {
           <div className="ex-portal xf-preview flex flex-col gap-4">
             <p className="flex items-start gap-2 rounded-xl border border-hairline bg-surface-sunken px-4 py-3 text-sm text-muted-foreground">
               <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-              Keys and solutions stay hidden until an attempt is submitted. Sit this paper in an
-              Exam Workspace.
+              Keys and solutions stay hidden until an attempt is submitted. Sit this paper in a
+              workspace.
             </p>
             {!saved.value.questions.length && (
               <p className="text-sm text-muted-foreground">
@@ -140,14 +140,26 @@ function ExamPane({
 }) {
   const { files, folders, openRules, addTextFile, workspaceId } = workspace;
   const lookup = useMemo(() => rulesFileFor(file, files, folders), [file, files, folders]);
+  // An uploaded paper can start immediately. Explicit missing or ambiguous
+  // rules still need fixing; only an untagged paper gets these defaults.
+  const defaultRules = lookup.kind === "missing" && !lookup.tagged;
   const rules = useMemo(
     () =>
       lookup.kind === "found"
         ? { kind: "found" as const, file: asText(lookup.file) }
-        : lookup.kind === "ambiguous"
-          ? { kind: "ambiguous" as const, files: lookup.files.map(asText) }
-          : { kind: "missing" as const, tagged: lookup.tagged },
-    [lookup],
+        : defaultRules
+          ? {
+              kind: "found" as const,
+              file: {
+                id: "default-rules",
+                name: "Default rules",
+                content: starterRules(file.name),
+              },
+            }
+          : lookup.kind === "ambiguous"
+            ? { kind: "ambiguous" as const, files: lookup.files.map(asText) }
+            : { kind: "missing" as const, tagged: lookup.tagged },
+    [lookup, defaultRules, file.name],
   );
   const rulesets = useMemo(
     () =>
@@ -164,6 +176,11 @@ function ExamPane({
     }
     return found;
   }, [files]);
+  const createRules = (content: string) => {
+    const made = addTextFile(`${file.name.replace(/\.[^.]+$/, "")}.xrule`, content, null);
+    onTagRules(made.name);
+    return made;
+  };
   if (workspace.paused) return null;
   return (
     <Suspense fallback={<Loading label="Opening exam" />}>
@@ -174,16 +191,17 @@ function ExamPane({
         rules={rules}
         rulesets={rulesets}
         images={images}
-        onOpenRules={openRules}
+        onOpenRules={(id) => {
+          if (defaultRules) openRules(createRules(starterRules(file.name)).id);
+          else openRules(id);
+        }}
         onUseRules={onTagRules}
-        onCreateRules={() => {
-          // Rulesets live at the top level: Settings lists them, not folders.
-          const made = addTextFile(
-            `${file.name.replace(/\.[^.]+$/, "")}.xrule`,
-            starterRules(file.name),
-            null,
+        onCreateRules={() => createRules(starterRules(file.name))}
+        onCreateGateRules={() => {
+          const paper = parseExamFile(file.content, file.name);
+          createRules(
+            gateMockXruleTemplate(file.name.replace(/\.[^.]+$/, ""), paper.questions.length),
           );
-          onTagRules(made.name);
         }}
       />
     </Suspense>

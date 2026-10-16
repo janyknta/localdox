@@ -1,18 +1,14 @@
-import { LEGACY_EXAM_WORKSPACE, workspaceKind, type WorkspaceKind } from "@/lib/workspace/kinds";
+import { readAppRoute, settingsPath, workspacePath } from "@/lib/app/routes";
+import { LEGACY_EXAM_WORKSPACE } from "@/services/exams/legacy-workspace";
 import { dataBytes } from "@/lib/workspace/binary";
 import { ConversionContext } from "@/services/doc-conversion/ConversionContext";
 import { ensureEmbedMediaFolder } from "@/lib/workspace/embed-media";
 import type { DocumentUpdate } from "@/services/office-editing";
 import { Fragment, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useBlocker, useLocation, useNavigate } from "@tanstack/react-router";
 import { PanelLeft, X, Search, Undo2, Settings, Folder } from "lucide-react";
 
-import {
-  ESCAPE_DEPTH,
-  NavHistoryContext,
-  useNavHistoryState,
-  type NavEntry,
-} from "@/hooks/use-nav-history";
+import { ESCAPE_DEPTH, NavHistoryContext, useNavHistoryState } from "@/hooks/use-nav-history";
 import {
   Sidebar,
   AddMenu,
@@ -90,7 +86,10 @@ import {
   type NotesTab,
   type RoughWorkProps,
 } from "./notes/NotesPanelLazy";
-import { isEditorOpen } from "./editor/open-editors";
+import { isEditorOpen, readOpenEditor, rewriteOpenEditor } from "./editor/open-editors";
+import { WorkspaceLinksContext } from "./workspace/WorkspaceLinksContext";
+import { NoteLinkIndex, resolveNoteLink, rewriteNoteLinks, splitNoteReference, noteTargetSpan } from "@/lib/markdown/note-links";
+import { folderPath, normalizePath } from "@/lib/markdown/media-references";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { EditFileContext } from "./viewer/EditFileContext";
 import type { AskAiPrefill } from "@/services/ai";
@@ -113,16 +112,12 @@ const DocumentViewer = lazy(() =>
  */
 const MAX_PANES = 4;
 
+const ExamConfigureDialog = lazy(() => import("./workspace/ExamConfigureDialog"));
+
 const SettingsPage = lazy(() =>
   import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
 
-/** The settings section a caller asked for, handed over the route change that
- *  opens the dialog. DocsApp is the route component, so it remounts on the way
- *  to /settings and nothing held inside it survives to be read at mount. */
-let pendingSettingsTab: "workspace" | "exams" | undefined;
-/** The ruleset Settings ▸ Exam rules should open on, when a paper asked to edit its rules. */
-let pendingSettingsRules: string | undefined;
 let pendingSettingsFocus = false;
 const AskAiPanel = lazy(() =>
   import("@/services/ai/AskAiPanel").then((m) => ({ default: m.AskAiPanel })),
@@ -137,7 +132,14 @@ import type { MdFile, MdChunk } from "@/lib/markdown/markdown-utils";
 // Type only: the writers behind it are a dynamic import at the call site, so
 // the OOXML builder is never on the path to the first paint.
 import type { ExportFormat } from "@/services/markdown-export";
-import type { Highlight } from "@/lib/markdown/dom-highlighter";
+import {
+  addNote as addNoteToSource,
+  changeAnnotation,
+  findAnnotation,
+  removeAnnotation,
+  type Annotation,
+  type AnnotationEvent,
+} from "@/lib/markdown/annotations";
 import {
   isBinExpired,
   WorkspaceConflictError,
@@ -164,7 +166,6 @@ import { clearArtifactResolutionCache } from "@/lib/workspace/workspace-artifact
 import { IMPORT_QUEUE, runBounded } from "@/lib/workspace/import-queue";
 import { toast } from "sonner";
 import { holdReload, registerReloadGuard, reloadConfirmed } from "@/lib/app/safe-reload";
-import { useHistory } from "@/hooks/use-history";
 import {
   isEditableTarget,
   hasModKey,
@@ -195,17 +196,7 @@ import {
   type PassageTarget,
   type SavedItem,
 } from "@/lib/workspace/saved-items";
-import {
-  createNote,
-  editNote,
-  highlightSource,
-  MAX_NOTE_CHARS,
-  resolveNoteSource,
-  sortNotes,
-  type Note,
-  type NoteDraft,
-  type NoteSource,
-} from "@/lib/workspace/notes";
+import { notebookEntries, pageOf, type NotebookEntry } from "@/lib/workspace/notes";
 import {
   createScratchpad,
   duplicateScratchpad,
@@ -215,7 +206,6 @@ import {
   linkScratchpad,
   MAX_SCRATCHPAD_CHARS,
   newScratchpadId,
-  noteFromScratchpad,
   pageAt,
   renameScratchpad,
   scratchpadDraftId,
@@ -258,9 +248,9 @@ import {
 
 type Theme = ThemePref;
 
-// Shared empty, so "this file has no highlights" is always the same array. A
-// fresh `[]` would be a new prop identity on every render.
-const EMPTY_HIGHLIGHTS: Highlight[] = [];
+// Shared empty, so "no notes listed" is always the same array. A fresh `[]`
+// would be a new prop identity on every render.
+const NO_ENTRIES: NotebookEntry[] = [];
 
 /** Whether the Notes panel was open — a per-device convenience, not workspace data. */
 const NOTES_OPEN_KEY = "localdox:notes-open";
@@ -309,13 +299,15 @@ function importSharedWorkspaceOnce(key: string): Promise<WorkspaceRecord> {
   return pending;
 }
 
-export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace?: boolean }) {
+export function DocsApp() {
   const [files, setFiles] = useState<MdFile[]>([]);
   const officeDirtyPanes = useRef(new Set<string>());
   // Sidebar folders. Flat buckets over the file list — a file's `folderId` says
   // which one it sits in, so folders can appear and disappear without touching
   // the documents themselves.
   const [folders, setFolders] = useState<FolderRecord[]>([]);
+  const noteIndex = useRef(new NoteLinkIndex());
+  const noteLinks = useMemo(() => noteIndex.current.update(files, folders), [files, folders]);
   /**
    * The split layout. Panes own their tabs; the app's single "active file" is
    * derived from whichever pane has focus.
@@ -525,14 +517,13 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
    * viewer to scroll to.
    */
   const [pendingSaved, setPendingSaved] = useState<PassageTarget | null>(null);
-  // Passages copied out of documents into the Notes panel. Snapshots: edits to
-  // their source never rewrite them (see lib/workspace/notes.ts).
-  const [notes, setNotes] = useState<Note[]>([]);
+  // Notes and highlights are not app state: they are kept in each document's
+  // Markdown (lib/markdown/annotations.ts) and read out for the panel.
   const [notesOpen, setNotesOpen] = useState(false);
   const notesOpenRef = useRef(notesOpen);
   notesOpenRef.current = notesOpen;
-  /** The note just copied, marked in the panel for a moment. */
-  const [freshNoteId, setFreshNoteId] = useState<string | null>(null);
+  /** The note just written, by where its fence starts; marked in the panel for a moment. */
+  const [freshNote, setFreshNote] = useState<{ fileId: string; at: number } | null>(null);
   const [notesTab, setNotesTab] = useState<NotesTab>("notes");
   // Rough work: the reader's scratchpads. Working space that never becomes part
   // of a document unless the reader inserts it (see lib/workspace/rough-work.ts).
@@ -541,20 +532,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
   // Whether the scratchpad field holds text it hasn't handed over yet. Like
   // `editorDirtyRef`, it is journalled, and holds off adopting another tab's write.
   const roughDirtyRef = useRef(false);
-  // Highlights are the one reader action with no other way back — a mis-drag
-  // silently replaces whatever it overlaps — so they get an undo stack.
-  // `resetHighlights` loads a workspace without making the previous one's
-  // highlights reachable by pressing undo.
-  const {
-    state: highlights,
-    set: setHighlights,
-    amend: amendHighlights,
-    reset: resetHighlights,
-    undo: undoHighlights,
-    redo: redoHighlights,
-    canUndo: canUndoHighlights,
-    canRedo: canRedoHighlights,
-  } = useHistory<Highlight[]>([]);
   // File whose highlights are shown in isolation via the "Show highlights only"
   // menu item; null when the modal is closed.
   // Files arriving from a `#share-files=` link, held until the reader picks
@@ -571,20 +548,20 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
   // Home page + personalization.
   const location = useLocation();
   const navigate = useNavigate();
-  const showSettings = location.pathname === "/settings";
+  const appRoute = readAppRoute(location.pathname);
+  const showSettings = appRoute.settings;
   const mountedSettingsRoute = useRef(showSettings);
 
-  // Navigation history. Owned here because this is where every destination —
-  // the route, the open file, the section, the search term — actually lives.
-  // `apply` is the only thing that moves the app backwards or forwards; the
-  // refs it reads are assigned further down, so it is written as a ref-reading
-  // callback rather than closing over state directly.
-  const applyNavEntryRef = useRef<(entry: NavEntry) => void>(() => {});
-  const applyNavEntry = useCallback((entry: NavEntry) => applyNavEntryRef.current(entry), []);
-  const captureNavScroll = useCallback(() => window.scrollY, []);
+  const pendingNavigationRef = useRef<string | null>(null);
   const navHistory = useNavHistoryState({
-    apply: applyNavEntry,
-    captureScroll: captureNavScroll,
+    resolvePath: (entry) => {
+      const path =
+        entry.fileId && workspaceIdRef.current
+          ? workspacePath(workspaceIdRef.current, entry.fileId)
+          : (entry.path ?? "/");
+      pendingNavigationRef.current = path;
+      return path;
+    },
   });
   // Read by callbacks that must not be recreated when the history changes.
   const navHistoryRef = useRef(navHistory);
@@ -606,8 +583,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
     expanded,
     sidebarCollapsed,
     saved,
-    highlights,
-    notes,
     scratchpads,
     recentFileIds,
   });
@@ -619,8 +594,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
     expanded,
     sidebarCollapsed,
     saved,
-    highlights,
-    notes,
     scratchpads,
     recentFileIds,
   };
@@ -629,8 +602,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
   const readingModeRef = useRef(readingMode);
   const activeHeadingIdRef = useRef<string | null>(null);
   const workspaceIdRef = useRef<string | null>(null);
-  const workspaceKindRef = useRef<WorkspaceKind>("reader");
-  const [kind, setKind] = useState<WorkspaceKind>("reader");
   const workspaceNameRef = useRef("My workspace");
   const createdAtRef = useRef(Date.now());
   const hydratedRef = useRef(false);
@@ -700,7 +671,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       id: workspaceIdRef.current ?? crypto.randomUUID(),
       revision: storageRevisionRef.current,
       name: workspaceNameRef.current,
-      kind: workspaceKindRef.current,
       createdAt: createdAtRef.current,
       updatedAt: Date.now(),
       files: s.files.map((f) => ({
@@ -721,8 +691,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       // older build reading this workspace keeps its file/section stars.
       bookmarks: toLegacyBookmarks(s.saved),
       saved: s.saved,
-      highlights: s.highlights,
-      notes: s.notes,
       scratchpads: s.scratchpads,
       ui: {
         activeFileId: s.activeFileId,
@@ -882,8 +850,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
     // `background`: another tab saved this workspace while this one was idle.
     // Adopt its data without moving the reader's scroll or flashing a status.
     (ws: WorkspaceRecord, { background = false }: { background?: boolean } = {}) => {
-      workspaceKindRef.current = workspaceKind(ws);
-      setKind(workspaceKind(ws));
       storageRevisionRef.current = ws.revision;
       storedRecordRef.current = ws;
       baseRecordRef.current = ws;
@@ -914,6 +880,7 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       // workspace is opened past that mark — which is also the only moment the
       // reader could have noticed it still being there.
       const swept = parsed.filter((f) => !isBinExpired(f.deletedAt));
+      snapshotRef.current = { ...snapshotRef.current, files: swept, folders: wsFolders };
       setFiles(swept);
       setFolders(wsFolders);
       setAutoEditFileId(null);
@@ -932,8 +899,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       setExpanded(ws.ui?.expanded ?? {});
       setSidebarCollapsed(!!ws.ui?.sidebarCollapsed);
       setSaved(ws.saved?.length ? ws.saved : migrateBookmarks(ws.bookmarks ?? [], parsed));
-      resetHighlights((ws.highlights ?? []).filter((h) => typeof h.text === "string"));
-      setNotes(ws.notes ?? []);
       setScratchpads(ws.scratchpads ?? []);
       setWorkspaceId(ws.id);
       workspaceIdRef.current = ws.id;
@@ -962,7 +927,7 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
         2500,
       );
     },
-    [resetHighlights, persistNow],
+    [persistNow],
   );
   adoptRef.current = (ws) => hydrateWorkspace(ws, { background: true });
 
@@ -1009,9 +974,8 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
         // the route this instance replaced — so it reads what that route saw.
         const { list, ws } = await persistence.serial(async () => {
           let list = await persistence.listWorkspaceSummaries();
-          let hasLegacy = initialExamWorkspace;
+          let hasLegacy = false;
           if (
-            !hasLegacy &&
             typeof indexedDB.databases === "function" &&
             (await indexedDB.databases()).some((db) => db.name === "localdox-exams-v2")
           ) {
@@ -1021,17 +985,15 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
             ).some((rows) => rows.length > 0);
           }
           if (hasLegacy && !list.some((w) => w.id === LEGACY_EXAM_WORKSPACE)) {
-            const legacy = newWorkspaceRecord("Exam Workspace", "exam");
+            const legacy = newWorkspaceRecord("Recovered exams");
             legacy.id = LEGACY_EXAM_WORKSPACE;
             await persistence.putWorkspace(legacy);
             list = await persistence.listWorkspaceSummaries();
           }
           if (list.length === 0 && !hashSharedWs) return { list, ws: undefined };
+          const requested = readAppRoute(window.location.pathname).workspaceId;
           const selected =
-            list.find(
-              (w) =>
-                w.id === (initialExamWorkspace ? LEGACY_EXAM_WORKSPACE : prefs.lastWorkspaceId),
-            ) ?? list[0];
+            list.find((w) => w.id === (requested ?? prefs.lastWorkspaceId)) ?? list[0];
           return { list, ws: hashSharedWs ?? (await persistence.getWorkspace(selected.id)) };
         });
         if (list.length === 0 && !hashSharedWs) {
@@ -1139,11 +1101,12 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
     () => ({
       id: workspaceIdRef.current,
       files: snapshotRef.current.files,
-      notes: snapshotRef.current.notes,
       scratchpads: snapshotRef.current.scratchpads,
     }),
     [],
   );
+
+  const uploadedRulesOpenRef = useRef<(id: string) => void>(() => {});
 
   const addFiles = useCallback(
     async (fileList: File[], attachments = false): Promise<MdFile[]> => {
@@ -1334,8 +1297,19 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
           return [...kept, ...existing];
         }
 
+        const uploadedRules = kept.filter(isRulesFile);
         toast.success(`Successfully uploaded ${kept.length} file${kept.length > 1 ? "s" : ""}!`, {
           id: toastId,
+          ...(uploadedRules.length
+            ? {
+                description: "Rulesets are available in Settings → Exam rules.",
+                duration: 10000,
+                action: {
+                  label: "Open exam rules",
+                  onClick: () => uploadedRulesOpenRef.current(uploadedRules[0].id),
+                },
+              }
+            : {}),
         });
         if (!attachments) navigate({ to: "/" }); // Attachments keep the editor open.
         return [...kept, ...existing];
@@ -1476,7 +1450,7 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       occurrence?: number,
       lineIndex?: number,
     ) => {
-      if (!confirmDiscardDraft(fileId)) return;
+      if (!confirmDiscardDraft(fileId)) return false;
       setActiveFileId(fileId);
       if (query !== undefined) setHighlightQuery(query || null);
       // A search hit knows the line it matched, so the viewer can scroll to the
@@ -1502,10 +1476,6 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
       }
       setActiveHeadingId(targetHeadingId);
 
-      if (pathnameRef.current !== "/") {
-        navigate({ to: "/" });
-      }
-
       setDrawerOpen(false);
       markDirty();
       // Every in-app way of opening a document funnels through here — the
@@ -1517,6 +1487,7 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
         headingId: targetHeadingId,
         query: query !== undefined ? query || null : highlightQueryRef.current,
       });
+      return true;
     },
     [navigate, markDirty],
   );
@@ -1579,7 +1550,7 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
         if (workspaceIdRef.current !== targetWorkspaceId) return;
         if (
           activeFileIdRef.current === source.id &&
-          pathnameRef.current === "/" &&
+          !readAppRoute(pathnameRef.current).settings &&
           !editorDirtyRef.current
         )
           handleSelect(derivative.id);
@@ -1887,16 +1858,36 @@ export function DocsApp({ initialExamWorkspace = false }: { initialExamWorkspace
     }
   }, []);
 
+  const updateLinkedWorkspace = useCallback((changeFiles: (files: MdFile[]) => MdFile[], changeFolders: (folders: FolderRecord[]) => FolderRecord[] = (value) => value) => {
+    const snapshot = snapshotRef.current;
+    // Include unsent keystrokes before rewriting; an open editor must never
+    // autosave its old links over a rename or lose text to an external update.
+    const before = snapshot.files.map((file) => {
+      const content = readOpenEditor(file.id);
+      return content === undefined || content === file.content ? file : { ...file, content };
+    });
+    const nextFolders = changeFolders(snapshot.folders);
+    const after = changeFiles(before);
+    const nextFiles = rewriteNoteLinks(before, after, snapshot.folders, nextFolders);
+    for (const file of before) rewriteOpenEditor(file.id, (content) => rewriteNoteLinks(before, after.map((item) => item.id === file.id ? { ...item, content } : item), snapshot.folders, nextFolders).find((item) => item.id === file.id)?.content ?? content);
+    setFiles(nextFiles);
+    setFolders(nextFolders);
+    markDirty();
+  }, [markDirty]);
+
   const renameFile = useCallback(
     (id: string, newName: string) => {
-      setFiles((prev) =>
+      newName = newName.trim();
+      if (!newName || /[\/\\\n\r]/.test(newName)) { toast.error("Use a file name without slashes."); return; }
+      const current = snapshotRef.current.files.find((file) => file.id === id);
+      if (snapshotRef.current.files.some((file) => file.id !== id && !file.deletedAt && file.folderId === current?.folderId && file.name.toLowerCase() === newName.toLowerCase())) { toast.error("A file with this name already exists in this folder."); return; }
+      updateLinkedWorkspace((prev) =>
         prev.map((f) =>
           f.id === id ? { ...f, name: newName, kind: getDocumentKind(newName, f.mimeType) } : f,
         ),
       );
-      markDirty();
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   /**
@@ -2041,6 +2032,12 @@ flowchart LR
 
   /** The New exam dialog, opened from the Create menu. */
   const [newExamOpen, setNewExamOpen] = useState(false);
+  const [newExamFolder, setNewExamFolder] = useState<string | null>(null);
+  const [configureExamId, setConfigureExamId] = useState<string | null>(null);
+  const openNewExam = useCallback((folderId: string | null = null) => {
+    setNewExamFolder(folderId);
+    setNewExamOpen(true);
+  }, []);
 
   /**
    * A new exam: an `.xam` paper whose header names its ruleset, plus that
@@ -2083,7 +2080,7 @@ flowchart LR
         size: content.length,
         addedAt: now,
         kind: "exam",
-        folderId: null,
+        folderId: newExamFolder,
         headings: [],
       });
       ensureWorkspace(made.length);
@@ -2103,7 +2100,7 @@ flowchart LR
           : `Its rules are in ${rules}, in Settings ▸ Exam rules. Replace the sample questions, then Save.`,
       });
     },
-    [location.pathname, navigate, markDirty, ensureWorkspace],
+    [location.pathname, navigate, markDirty, ensureWorkspace, newExamFolder],
   );
 
   /**
@@ -2178,7 +2175,7 @@ flowchart LR
   const moveFolderToFolder = useCallback(
     (folderId: string, parentId: string | null) => {
       if (folderId === parentId) return;
-      setFolders((prev) => {
+      updateLinkedWorkspace((value) => value, (prev) => {
         if (parentId) {
           const parentOf = new Map(prev.map((f) => [f.id, f.parentId ?? null]));
           for (let at: string | null = parentId; at; at = parentOf.get(at) ?? null) {
@@ -2187,19 +2184,20 @@ flowchart LR
         }
         return prev.map((f) => (f.id === folderId ? { ...f, parentId } : f));
       });
-      markDirty();
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   const renameFolder = useCallback(
     (id: string, name: string) => {
       const trimmed = name.trim();
       if (!trimmed) return;
-      setFolders((prev) => prev.map((f) => (f.id === id ? { ...f, name: trimmed } : f)));
-      markDirty();
+      if (/[\/\\\n\r]/.test(trimmed)) { toast.error("Use a folder name without slashes."); return; }
+      const current = snapshotRef.current.folders.find((folder) => folder.id === id);
+      if (snapshotRef.current.folders.some((folder) => folder.id !== id && (folder.parentId ?? null) === (current?.parentId ?? null) && folder.name.toLowerCase() === trimmed.toLowerCase())) { toast.error("A folder with this name already exists here."); return; }
+      updateLinkedWorkspace((value) => value, (prev) => prev.map((f) => (f.id === id ? { ...f, name: trimmed } : f)));
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   /**
@@ -2211,23 +2209,20 @@ flowchart LR
    */
   const deleteFolder = useCallback(
     (id: string) => {
-      setFolders((prev) =>
+      updateLinkedWorkspace((prev) => prev.map((f) => (f.folderId === id ? { ...f, folderId: null } : f)), (prev) =>
         prev
           .filter((f) => f.id !== id)
           .map((f) => (f.parentId === id ? { ...f, parentId: null } : f)),
       );
-      setFiles((prev) => prev.map((f) => (f.folderId === id ? { ...f, folderId: null } : f)));
-      markDirty();
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   const moveFileToFolder = useCallback(
     (fileId: string, folderId: string | null) => {
-      setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, folderId } : f)));
-      markDirty();
+      updateLinkedWorkspace((prev) => prev.map((f) => (f.id === fileId ? { ...f, folderId } : f)));
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   /**
@@ -2238,7 +2233,7 @@ flowchart LR
   const reorderFolder = useCallback(
     (folderId: string, targetId: string) => {
       if (folderId === targetId) return;
-      setFolders((prev) => {
+      updateLinkedWorkspace((value) => value, (prev) => {
         const from = prev.findIndex((f) => f.id === folderId);
         const to = prev.findIndex((f) => f.id === targetId);
         if (from === -1 || to === -1) return prev;
@@ -2252,9 +2247,8 @@ flowchart LR
         next.splice(to, 0, { ...moved, parentId });
         return next;
       });
-      markDirty();
     },
-    [markDirty],
+    [updateLinkedWorkspace],
   );
 
   const reorderFile = useCallback(
@@ -2269,105 +2263,6 @@ flowchart LR
     },
     [markDirty],
   );
-
-  const addHighlight = useCallback(
-    (hl: Omit<Highlight, "id" | "fileId">, fileId: string) => {
-      setHighlights((prev) => {
-        const overlaps = prev.filter(
-          (p) =>
-            p.fileId === fileId &&
-            p.subtopicId === hl.subtopicId &&
-            typeof p.start === "number" &&
-            typeof p.end === "number" &&
-            typeof hl.start === "number" &&
-            typeof hl.end === "number" &&
-            !(hl.end <= p.start || hl.start >= p.end),
-        );
-        const withoutOverlaps = prev.filter((p) => !overlaps.includes(p));
-        return [
-          ...withoutOverlaps,
-          { id: crypto.randomUUID(), fileId, createdAt: Date.now(), ...hl },
-        ];
-      });
-      markDirty();
-    },
-    [markDirty],
-  );
-
-  const updateHighlight = useCallback(
-    (id: string, patch: Partial<{ color: string; label: string }>) => {
-      setHighlights((prev) => prev.map((h) => (h.id === id ? { ...h, ...patch } : h)));
-      markDirty();
-    },
-    [markDirty],
-  );
-
-  const removeHighlight = useCallback(
-    (id: string) => {
-      setHighlights((prev) => prev.filter((h) => h.id !== id));
-      markDirty();
-    },
-    [markDirty],
-  );
-
-  // The viewer re-anchors highlights whose text moved (the document was edited)
-  // and hands back the corrected offsets. Not an undoable step — the reader
-  // didn't do it — but persisted, so the repair survives a reload.
-  const repairHighlights = useCallback(
-    (patches: Array<{ id: string; patch: Partial<Highlight> }>) => {
-      if (!patches.length) return;
-      const byId = new Map(patches.map((p) => [p.id, p.patch]));
-      amendHighlights((prev) => {
-        let changed = false;
-        const next = prev.map((h) => {
-          const patch = byId.get(h.id);
-          if (!patch) return h;
-          const merged = { ...h, ...patch };
-          if ((Object.keys(patch) as Array<keyof Highlight>).every((k) => h[k] === merged[k])) {
-            return h;
-          }
-          changed = true;
-          return merged;
-        });
-        return changed ? next : prev;
-      });
-      markDirty();
-    },
-    [amendHighlights, markDirty],
-  );
-
-  // Undo/redo for highlights. Cmd on macOS, Ctrl elsewhere; redo accepts both
-  // the Windows form (Ctrl+Y) and the macOS one (Cmd+Shift+Z).
-  //
-  // Two things are deliberately left alone: a focused input or textarea keeps
-  // its native undo (the markdown editor lives in one), and if there is nothing
-  // to undo the event is not consumed, so the browser's own undo still works.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!hasModKey(e)) return;
-      if (isEditableTarget(e.target)) return;
-      const key = e.key.toLowerCase();
-
-      const isRedo = key === "y" || (key === "z" && e.shiftKey);
-      const isUndo = key === "z" && !e.shiftKey;
-      if (!isRedo && !isUndo) return;
-
-      if (isRedo) {
-        if (!canRedoHighlights) return;
-        e.preventDefault();
-        redoHighlights();
-        toast("Redid highlight change");
-      } else {
-        if (!canUndoHighlights) return;
-        e.preventDefault();
-        undoHighlights();
-        toast("Undid highlight change");
-      }
-      markDirty();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [canUndoHighlights, canRedoHighlights, undoHighlights, redoHighlights, markDirty]);
 
   const toggleFile = useCallback(
     (fileId: string) => {
@@ -2405,84 +2300,26 @@ flowchart LR
   const closeNotes = useCallback(() => setNotesOpen(false), []);
 
   useEffect(() => {
-    if (!freshNoteId) return;
-    const timer = setTimeout(() => setFreshNoteId(null), 2000);
+    if (!freshNote) return;
+    const timer = setTimeout(() => setFreshNote(null), 2000);
     return () => clearTimeout(timer);
-  }, [freshNoteId]);
+  }, [freshNote]);
 
-  const addNote = useCallback(
-    (fileId: string, draft: NoteDraft) => {
-      const file = filesRef.current.find((f) => f.id === fileId);
-      if (!file || !draft.content.trim()) return;
-      const note = createNote(draft, file);
-      setNotes((prev) => [...prev, note]);
-      setFreshNoteId(note.id);
-      markDirty();
-      const truncated = draft.content.length > MAX_NOTE_CHARS;
-      toast.success("Copied to notes", {
-        id: "note-added",
-        description: truncated
-          ? `That selection was very long; the first ${MAX_NOTE_CHARS.toLocaleString()} characters were kept.`
-          : undefined,
-        action: notesOpenRef.current
-          ? undefined
-          : { label: "Show notes", onClick: () => setNotesOpen(true) },
-      });
-    },
-    [markDirty],
-  );
-
-  const updateNote = useCallback(
-    (id: string, content: string) => {
-      setNotes((prev) => prev.map((note) => (note.id === id ? editNote(note, content) : note)));
-      markDirty();
-    },
-    [markDirty],
-  );
-
-  // Deleting is immediate and undoable, rather than confirmed: a note is one
-  // click to make, and a confirmation on every tidy-up teaches readers to
-  // click through confirmations.
-  const removeNote = useCallback(
-    (id: string) => {
-      const note = snapshotRef.current.notes.find((n) => n.id === id);
-      if (!note) return;
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-      markDirty();
-      toast("Note deleted", {
-        id: "note-deleted",
-        action: {
-          label: "Undo",
-          onClick: () => {
-            setNotes((prev) => (prev.some((n) => n.id === id) ? prev : [...prev, note]));
-            markDirty();
-          },
-        },
-      });
-    },
-    [markDirty],
-  );
-
-  // Deleting a highlight from the Notes list is offered back the way a note's
-  // deletion is: the list is far from the passage, so a misclick is unseen.
-  const removeHighlightFromNotes = useCallback(
-    (id: string) => {
-      const highlight = snapshotRef.current.highlights.find((h) => h.id === id);
-      if (!highlight) return;
-      removeHighlight(id);
-      toast("Highlight removed", {
-        id: "note-deleted",
-        action: {
-          label: "Undo",
-          onClick: () => {
-            setHighlights((prev) => (prev.some((h) => h.id === id) ? prev : [...prev, highlight]));
-            markDirty();
-          },
-        },
-      });
-    },
-    [removeHighlight, setHighlights, markDirty],
-  );
+  /**
+   * The viewer wrote a highlight or note into a document. A note is announced,
+   * since it lands somewhere the reader may not be looking: the panel.
+   */
+  const onAnnotated = useCallback((event: AnnotationEvent) => {
+    if (event.kind !== "note") return;
+    setFreshNote({ fileId: event.fileId, at: event.at });
+    toast.success("Copied to notes", {
+      id: "note-added",
+      description: "Saved in the document, after the passage.",
+      action: notesOpenRef.current
+        ? undefined
+        : { label: "Show notes", onClick: () => setNotesOpen(true) },
+    });
+  }, []);
 
   const sortFilesByName = useCallback(() => {
     setFiles((prev) => {
@@ -2562,6 +2399,85 @@ flowchart LR
     [markDirty],
   );
 
+  /**
+   * Change a document from outside its viewer: the Notes panel, rough work.
+   * Text still in an open editor is read first and rewritten in place, so its
+   * next autosave can't put the old text back. Null when nothing changed.
+   */
+  const rewriteDocument = useCallback(
+    (fileId: string, transform: (content: string) => string | null) => {
+      const file = snapshotRef.current.files.find((f) => f.id === fileId);
+      if (!file) return null;
+      const before = readOpenEditor(fileId) ?? file.content;
+      const after = transform(before);
+      if (after === null || after === before) return null;
+      rewriteOpenEditor(fileId, (text) => (text === before ? after : (transform(text) ?? text)));
+      handleContentChange(fileId, after);
+      return { before, after };
+    },
+    [handleContentChange],
+  );
+
+  /**
+   * Rewrite the annotation an entry stands for, found again in the document's
+   * current text (it may have moved since the panel rendered).
+   */
+  const rewriteEntry = useCallback(
+    (entry: NotebookEntry, change: (content: string, annotation: Annotation) => string) => {
+      let missing = false;
+      const result = rewriteDocument(entry.fileId, (content) => {
+        const current = findAnnotation(content, entry);
+        if (!current) missing = true;
+        return current ? change(content, current) : null;
+      });
+      if (missing)
+        toast.error("That note changed in its document. Nothing was changed.", {
+          id: "note-changed",
+        });
+      return result;
+    },
+    [rewriteDocument],
+  );
+
+  /**
+   * Undo for a panel action that took an annotation out: the document as it
+   * was, if nothing else changed since; else the block, put back where it was.
+   */
+  const restoreEntry = useCallback(
+    (entry: NotebookEntry, removed: { before: string; after: string }) => {
+      const block = removed.before.slice(entry.span.start, entry.span.end);
+      rewriteDocument(entry.fileId, (content) => {
+        if (content === removed.after) return removed.before;
+        const at = Math.min(entry.span.start, content.length);
+        const lineStart = at === 0 ? 0 : content.lastIndexOf("\n", at - 1) + 1;
+        return insertIntoDocument(content, block, lineStart).content;
+      });
+    },
+    [rewriteDocument],
+  );
+
+  const updateNote = useCallback(
+    (entry: NotebookEntry, body: string) =>
+      void rewriteEntry(entry, (content, current) => changeAnnotation(content, current, { body })),
+    [rewriteEntry],
+  );
+
+  // Deleting is immediate and undoable, rather than confirmed: a note is one
+  // click to make, and a confirmation on every tidy-up teaches readers to
+  // click through confirmations. The list is far from the passage, so a
+  // misclick would go unseen without the Undo.
+  const removeEntry = useCallback(
+    (entry: NotebookEntry) => {
+      const removed = rewriteEntry(entry, removeAnnotation);
+      if (!removed) return;
+      toast(entry.kind === "note" ? "Note deleted" : "Highlight removed", {
+        id: "note-deleted",
+        action: { label: "Undo", onClick: () => restoreEntry(entry, removed) },
+      });
+    },
+    [rewriteEntry, restoreEntry],
+  );
+
   // ---- rough work ----
 
   // Which tab and which pad were showing: per device, like the panel itself.
@@ -2604,6 +2520,58 @@ flowchart LR
     setActivePadId(pad.id);
     markDirty();
   }, [markDirty, readerFile]);
+
+  const moveToRoughWork = useCallback(
+    (entry: NotebookEntry) => {
+      const content = entry.body;
+      if (!content.trim()) return;
+      if (content.length > MAX_SCRATCHPAD_CHARS) {
+        toast.error("This text is too long for a scratchpad. Nothing was moved.");
+        return;
+      }
+      const snapshot = snapshotRef.current;
+      const file = snapshot.files.find((item) => item.id === entry.fileId);
+      const removed = rewriteEntry(entry, removeAnnotation);
+      if (!removed) return;
+      const pad = {
+        ...createScratchpad(snapshot.scratchpads, file ? { id: file.id, name: file.name } : null),
+        content,
+      };
+      const workspace = workspaceIdRef.current;
+      const previousPadId = activePadId;
+      setScratchpads((prev) => [...prev, pad]);
+      setActivePadId(pad.id);
+      setNotesTab("rough");
+      markDirty();
+      toast.success("Moved to rough work", {
+        id: "note-moved",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            if (workspaceIdRef.current !== workspace) return;
+            const currentPad = snapshotRef.current.scratchpads.find((item) => item.id === pad.id);
+            const pending =
+              workspace &&
+              journal.list(workspace).find((draft) => draft.fileId === scratchpadDraftId(pad.id));
+            // Keep work edited since the move, including text still in the editor's debounce.
+            if (
+              currentPad?.updatedAt === pad.updatedAt &&
+              currentPad.content === content &&
+              (!pending || pending.text === content)
+            ) {
+              setScratchpads((prev) => prev.filter((item) => item.id !== pad.id));
+              setActivePadId((id) => (id === pad.id ? previousPadId : id));
+              if (workspace) journal.discard(workspace, scratchpadDraftId(pad.id));
+            }
+            restoreEntry(entry, removed);
+            setNotesTab("notes");
+            markDirty();
+          },
+        },
+      });
+    },
+    [activePadId, journal, markDirty, rewriteEntry, restoreEntry],
+  );
 
   const changePad = useCallback(
     (id: string, content: string) => updateScratchpad(id, (pad) => editScratchpad(pad, content)),
@@ -2691,21 +2659,46 @@ flowchart LR
     [journal, markDirty],
   );
 
+  /**
+   * A note made from rough work goes into the pad's document, at its end; a
+   * pad with no (live) document saves into the workspace's Notes.md, which is
+   * created on first use. Either way it is a copy: the pad stays as it is.
+   */
   const savePadAsNote = useCallback(
     (id: string, markdown: string) => {
-      const pad = snapshotRef.current.scratchpads.find((p) => p.id === id);
+      const snapshot = snapshotRef.current;
+      const pad = snapshot.scratchpads.find((p) => p.id === id);
       if (!pad || !markdown.trim()) return;
-      const note = noteFromScratchpad(pad, markdown.slice(0, MAX_NOTE_CHARS));
-      setNotes((prev) => [...prev, note]);
-      setFreshNoteId(note.id);
-      markDirty();
+      const live = (fileId: string | null) =>
+        snapshot.files.find((f) => f.id === fileId && f.deletedAt == null);
+      const target =
+        live(pad.fileId) ??
+        snapshot.files.find((f) => f.deletedAt == null && f.name.toLowerCase() === "notes.md");
+      // Set inside the rewrite callback, which flow analysis doesn't follow.
+      let saved = null as { fileId: string; name: string; at: number } | null;
+      if (target) {
+        rewriteDocument(target.id, (content) => {
+          const placed = addNoteToSource(content, null, markdown);
+          if (placed) saved = { fileId: target.id, name: target.name, at: placed.at };
+          return placed?.content ?? null;
+        });
+      } else {
+        const placed = addNoteToSource("", null, markdown);
+        if (placed) {
+          const created = addTextFile("Notes.md", placed.content, null);
+          saved = { fileId: created.id, name: created.name, at: placed.at };
+        }
+      }
+      if (!saved) return;
+      const { fileId, name, at } = saved;
+      setFreshNote({ fileId, at });
       toast.success("Saved to notes", {
         id: "note-added",
-        description: "A copy: changing the scratchpad later won't change the note.",
+        description: `Added to the end of ${name}. A copy: changing the scratchpad later won't change it.`,
         action: { label: "Show notes", onClick: () => setNotesTab("notes") },
       });
     },
-    [markDirty],
+    [rewriteDocument, addTextFile],
   );
 
   /**
@@ -3021,16 +3014,113 @@ flowchart LR
   // ---- workspace management ----
 
   const switchWorkspace = useCallback(
-    async (id: string) => {
+    async (id: string, options?: { fromRoute?: boolean }) => {
       if (id === workspaceIdRef.current) return;
       if (!(await persistNow(true))) return;
       const ws = await persistence.serial(() => persistence.getWorkspace(id));
       if (!ws) return;
       hydrateWorkspace(ws);
       savePrefs({ lastWorkspaceId: id });
+      if (!options?.fromRoute && !readAppRoute(pathnameRef.current).settings) {
+        const path = workspacePath(id, ws.ui?.activeFileId);
+        pendingNavigationRef.current = path;
+        void navigate({ to: path });
+      }
     },
-    [persistNow, hydrateWorkspace],
+    [persistNow, hydrateWorkspace, navigate],
   );
+
+  const appliedRouteRef = useRef<string | null>(null);
+  const applyingRouteRef = useRef(false);
+  const routeTargetRef = useRef<{ workspaceId?: string; fileId?: string } | null>(null);
+  const [appliedRoute, setAppliedRoute] = useState<string | null>(null);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  useEffect(() => {
+    if (booting) return;
+    const href = location.href;
+    if (appliedRouteRef.current === href) return;
+    applyingRouteRef.current = true;
+    routeTargetRef.current = readAppRoute(location.pathname);
+    let alive = true;
+    const apply = async () => {
+      const route = readAppRoute(location.pathname);
+      if (route.workspaceId && route.workspaceId !== workspaceIdRef.current) {
+        if (!workspaces.some((w) => w.id === route.workspaceId)) {
+          if (alive) setRouteError("This workspace is not available on this device.");
+          return;
+        }
+        await switchWorkspace(route.workspaceId, { fromRoute: true });
+      }
+      if (!alive) return;
+      if (route.fileId) {
+        const file = snapshotRef.current.files.find((f) => f.id === route.fileId && !f.deletedAt);
+        if (!file) {
+          setRouteError(
+            "This file is not available in this workspace. Choose a file from the sidebar.",
+          );
+          return;
+        }
+        setActiveFileId(route.fileId);
+        setActiveHeadingId(location.hash || "preamble");
+        if (location.hash) setScrollTarget(location.hash);
+      }
+      const state = location.state as typeof location.state & { localdoxQuery?: string | null };
+      if (state.localdoxQuery !== undefined) setHighlightQuery(state.localdoxQuery);
+      setRouteError(null);
+      setDrawerOpen(false);
+    };
+    void apply()
+      .catch((error) => {
+        if (alive)
+          setRouteError(
+            error instanceof Error ? error.message : "This destination could not be opened.",
+          );
+      })
+      .finally(() => {
+        if (alive) {
+          appliedRouteRef.current = href;
+          setAppliedRoute(href);
+          applyingRouteRef.current = false;
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [
+    booting,
+    location.href,
+    location.pathname,
+    location.hash,
+    location.state,
+    switchWorkspace,
+    workspaces,
+    setActiveFileId,
+  ]);
+
+  useEffect(() => {
+    if (booting || showSettings || routeError || applyingRouteRef.current || !workspaceId) return;
+    if (pendingNavigationRef.current && pendingNavigationRef.current !== location.pathname) return;
+    pendingNavigationRef.current = null;
+    if (appliedRoute !== location.href) return;
+    const target = routeTargetRef.current;
+    if (target?.workspaceId && target.workspaceId !== workspaceId) return;
+    if (target?.fileId && target.fileId !== activeFileId) return;
+    routeTargetRef.current = null;
+    const path = workspacePath(workspaceId, activeFileId);
+    if (location.pathname !== path)
+      void navigate({ to: path, hash: location.hash, replace: true, resetScroll: false });
+  }, [
+    appliedRoute,
+    booting,
+    showSettings,
+    routeError,
+    workspaceId,
+    activeFileId,
+    location.href,
+    location.pathname,
+    location.hash,
+    navigate,
+  ]);
 
   // ---- other tabs ----
   //
@@ -3173,7 +3263,6 @@ flowchart LR
       setFiles([]);
       setFolders([]);
       setSaved([]);
-      setNotes([]);
       setScratchpads([]);
       setSaveStatus("idle");
     } finally {
@@ -3213,12 +3302,12 @@ flowchart LR
   const pendingMoveSummary = useMemo(() => {
     if (!pendingMove) return { files: 0, folders: 0 };
     const plan = planTransfer(
-      { files: filesRef.current, folders, saved, highlights },
+      { files: filesRef.current, folders, saved },
       { files: [], folders: [] },
       pendingMove,
     );
     return { files: plan.files.length, folders: plan.folders.length };
-  }, [pendingMove, folders, saved, highlights]);
+  }, [pendingMove, folders, saved]);
 
   /**
    * Move documents and folders into another workspace.
@@ -3284,8 +3373,6 @@ flowchart LR
         setFiles((prev) => prev.filter((file) => !plan.removeFileIds.has(file.id)));
         setFolders((prev) => prev.filter((folder) => !plan.removeFolderIds.has(folder.id)));
         setSaved((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
-        setHighlights((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
-        setNotes((prev) => prev.filter((item) => !plan.removeFileIds.has(item.fileId)));
         setScratchpads((prev) =>
           prev.filter((pad) => pad.fileId === null || !plan.removeFileIds.has(pad.fileId)),
         );
@@ -3315,7 +3402,7 @@ flowchart LR
         setPendingMove(null);
       }
     },
-    [pendingMove, buildRecord, enterConflict, refreshWorkspaceList, setHighlights],
+    [pendingMove, buildRecord, enterConflict, refreshWorkspaceList],
   );
 
   const openEmbeddedArtifact = useCallback(
@@ -3338,13 +3425,13 @@ flowchart LR
   const storedWorkspaces = useCallback(() => persistence.listWorkspaceSummaries(), []);
 
   const newWorkspace = useCallback(
-    async (name?: string, kind: WorkspaceKind = "reader") => {
+    async (name?: string) => {
       const asked = name || window.prompt("Enter new workspace name:");
       if (!asked) return;
       const finalName = resolveWorkspaceName(asked, await storedWorkspaces());
       if (!finalName) return;
       if (!(await persistNow(true))) return;
-      const ws = newWorkspaceRecord(finalName, kind);
+      const ws = newWorkspaceRecord(finalName);
       await persistence.serial(() => persistence.putWorkspace(ws));
       await refreshWorkspaceList();
       hydrateWorkspace(ws);
@@ -3639,7 +3726,7 @@ flowchart LR
       }
       const { list, next } = await persistence.serial(async () => {
         const record = await persistence.getWorkspace(id);
-        if (record?.kind === "exam") {
+        if (record) {
           try {
             await (
               await import("@/services/exams/manage")
@@ -3741,25 +3828,6 @@ flowchart LR
   // changed — which made memoizing it pointless and re-ran its highlight
   // painting and plugin work each time.
 
-  const activeFileHighlights = useMemo(
-    () => (activeFile ? highlights.filter((h) => h.fileId === activeFile.id) : EMPTY_HIGHLIGHTS),
-    [highlights, activeFile],
-  );
-
-  const addHighlightToActive = useCallback(
-    (hl: Omit<Highlight, "id" | "fileId">) => {
-      if (activeFile) addHighlight(hl, activeFile.id);
-    },
-    [addHighlight, activeFile],
-  );
-
-  const copyToNotesFromActive = useCallback(
-    (draft: NoteDraft) => {
-      if (activeFile) addNote(activeFile.id, draft);
-    },
-    [addNote, activeFile],
-  );
-
   const shareActiveFile = useCallback(() => {
     if (activeFile) shareFile(activeFile.id);
   }, [shareFile, activeFile]);
@@ -3834,90 +3902,33 @@ flowchart LR
   }, [activeFile, activeHeadingId]);
 
   /**
-   * Open a passage the reader kept — a note's source, or a highlight — and
-   * flash it. Resolved against the document's Markdown first (see
-   * `resolveNoteSource`), so the right page opens even if the passage has
-   * moved, and a passage or document that is gone says so instead of opening
-   * somewhere unrelated.
+   * Open the document on a note, or on the passage a highlight marks, and
+   * flash it. Found again in the document's current text first, so the right
+   * page opens even if text was added above it since the panel rendered.
    */
-  const openPassage = useCallback(
-    async (fileId: string, source: NoteSource, fallbackName: string) => {
-      const file = filesRef.current.find((f) => f.id === fileId);
-      const status = resolveNoteSource({ source }, file);
-      const name = file?.name ?? fallbackName;
-      if (status.kind === "missing-document") {
-        toast.info("The source document is no longer in this workspace.", {
-          id: "note-source",
-          description: "The note keeps its own copy of the passage.",
-        });
-        return;
-      }
-      if (status.kind === "binned") {
-        toast.info(`“${name}” is in the Bin.`, {
-          id: "note-source",
-          description: "Restore it from Settings ▸ Storage to follow this link.",
-        });
-        return;
-      }
-      // On a phone the sheet covers the very passage being opened.
-      if (mobileNavigation) setNotesOpen(false);
-      const target = status.kind === "found" ? status.subtopicId : (status.target ?? undefined);
-      if (showSettings) await openFromHome(fileId, target);
-      else handleSelect(fileId, target);
-      if (status.kind === "missing-passage") {
+  const openEntry = useCallback(
+    async (entry: NotebookEntry) => {
+      const file = filesRef.current.find((f) => f.id === entry.fileId);
+      if (!file) return;
+      const current = findAnnotation(file.content, entry) ?? entry;
+      if (current.kind === "highlight" && !current.target)
         toast.info("This passage is no longer in the document.", {
           id: "note-source",
-          description: target ? "Opened the section it came from." : undefined,
+          description: "Its highlight is shown as a card where the passage was.",
         });
-        return;
-      }
-      // Stored offsets are only a hint, and only in the space they were
-      // measured in: the page they came from, or the whole document.
-      const sameSpace =
-        !status.moved &&
-        (source.subtopicId === undefined) === (readingModeRef.current === "single");
-      setPendingSaved({
-        fileId,
-        text: source.quote,
-        prefix: source.prefix,
-        suffix: source.suffix,
-        start: sameSpace ? source.start : undefined,
-        // The exact file span, when the note's source anchor still holds.
-        span: status.span,
-      });
+      // A highlight lands on its passage; a note (or a lost highlight's card) on its text.
+      const span = current.target ?? current.bodySpan;
+      // On a phone the sheet covers the very passage being opened.
+      if (mobileNavigation) setNotesOpen(false);
+      const page = pageOf(file, span.start)?.id;
+      if (showSettings) await openFromHome(file.id, page);
+      else handleSelect(file.id, page);
+      setPendingSaved({ fileId: file.id, span });
     },
     [mobileNavigation, showSettings, openFromHome, handleSelect],
   );
 
-  /** A note's source link: its passage, or the scratchpad it was saved from. */
-  const openNoteSource = useCallback(
-    (note: Note) => {
-      // A note saved from rough work links to its scratchpad, not a passage.
-      if (note.origin) {
-        const padId = note.origin.scratchpadId;
-        if (!snapshotRef.current.scratchpads.some((pad) => pad.id === padId)) {
-          toast.info("That scratchpad was deleted.", {
-            id: "note-source",
-            description: "The note keeps its own copy of the work.",
-          });
-          return;
-        }
-        setActivePadId(padId);
-        setNotesTab("rough");
-        return;
-      }
-      void openPassage(note.fileId, note.source, note.fileName);
-    },
-    [openPassage],
-  );
-
-  /** A highlight in the Notes list: open the document on the mark itself. */
-  const openHighlight = useCallback(
-    (highlight: Highlight) => void openPassage(highlight.fileId, highlightSource(highlight), ""),
-    [openPassage],
-  );
-
-  // What the panel shows about each note's source, by file id.
+  // What the panel shows about each entry's document, by file id.
   const filesById = useMemo(() => new Map(files.map((file) => [file.id, file])), [files]);
   const noteFileName = useCallback((fileId: string) => filesById.get(fileId)?.name, [filesById]);
   const noteSourceState = useCallback(
@@ -3927,18 +3938,30 @@ flowchart LR
     },
     [filesById],
   );
-  // A highlight's page, for its line in the Notes list. Not the preamble's:
-  // that page is titled with the document's own name, already shown.
-  const highlightSection = useCallback(
-    (highlight: Highlight) => {
-      const file = filesById.get(highlight.fileId);
-      if (!file || !highlight.subtopicId || highlight.subtopicId === "preamble") return undefined;
-      return fileSubtopics(file).find((chunk) => chunk.id === highlight.subtopicId)?.title;
+  // An entry's page, for its line in the Notes list. Not the preamble's: that
+  // page is titled with the document's own name, already shown.
+  const entrySection = useCallback(
+    (entry: NotebookEntry) => {
+      const file = filesById.get(entry.fileId);
+      const page = file && pageOf(file, (entry.target ?? entry.span).start);
+      return page && page.id !== "preamble" ? page.title : undefined;
     },
     [filesById],
   );
-  const sortedNotes = useMemo(() => sortNotes(notes), [notes]);
-  const writing = useMemo(() => ({ notes, scratchpads }), [notes, scratchpads]);
+  // Read out of the documents only while the panel is open to show them.
+  const entries = useMemo(
+    () => (notesOpen ? notebookEntries(files) : NO_ENTRIES),
+    [files, notesOpen],
+  );
+  const freshEntryId = useMemo(
+    () =>
+      freshNote
+        ? (entries.find((e) => e.fileId === freshNote.fileId && e.span.start === freshNote.at)
+            ?.id ?? null)
+        : null,
+    [entries, freshNote],
+  );
+  const writing = useMemo(() => ({ scratchpads }), [scratchpads]);
 
   const readerFileForPads = useMemo(
     () =>
@@ -4001,40 +4024,43 @@ flowchart LR
   );
 
   const goHome = useCallback(() => navigate({ to: "/" }), [navigate]);
-  // An optional tab lands the dialog straight on a section — "All workspaces"
-  // in the workspace menus opens it on workspace settings rather than making
-  // you find the tab yourself.
-  //
-  // Held outside the component: opening settings is a route change, and this
-  // component *is* the route, so it remounts on the way there and any state or
-  // ref holding the request is wiped before the dialog mounts to read it.
+  const settingsReturnRef = useRef<string | null>(null);
   const openSettings = useCallback(
     (tab?: "workspace" | "exams") => {
-      pendingSettingsTab = tab;
-      navigate({ to: "/settings" });
-      navHistoryRef.current.push({ path: "/settings", fileId: null, headingId: null });
+      if (!readAppRoute(pathnameRef.current).settings) settingsReturnRef.current = location.href;
+      navigate({ to: settingsPath(tab) });
     },
-    [navigate],
+    [navigate, location.href],
   );
-  /** Rulesets are edited in Settings, not the reader: open it on this one. */
   const openRulesSettings = useCallback(
     (fileId: string) => {
-      pendingSettingsRules = fileId;
-      openSettings("exams");
+      if (!readAppRoute(pathnameRef.current).settings) settingsReturnRef.current = location.href;
+      navigate({ to: settingsPath("exams", fileId) });
     },
-    [openSettings],
+    [navigate, location.href],
   );
 
-  // Closing the dialog is a route change back to the reader. Going through the
-  // trail rather than straight to "/" keeps whatever document was open, and
-  // means the close button, Escape, the backdrop and back all do one thing.
+  const openPracticeSettings = useCallback(
+    (fileId: string) => {
+      if (!readAppRoute(pathnameRef.current).settings) settingsReturnRef.current = location.href;
+      navigate({ to: settingsPath("practice", fileId) });
+    },
+    [navigate, location.href],
+  );
+  uploadedRulesOpenRef.current = openRulesSettings;
+
   const closeSettings = useCallback(() => {
-    // Spent: the next plain open starts where it always did.
-    pendingSettingsTab = undefined;
-    pendingSettingsRules = undefined;
     pendingSettingsFocus = true;
-    if (navHistoryRef.current.canBack) navHistoryRef.current.back();
-    else navigate({ to: "/" });
+    const previous = settingsReturnRef.current;
+    const sameWorkspace =
+      previous && readAppRoute(previous.split(/[?#]/)[0]).workspaceId === workspaceIdRef.current;
+    const destination = sameWorkspace
+      ? previous
+      : workspaceIdRef.current
+        ? workspacePath(workspaceIdRef.current, activeFileIdRef.current)
+        : "/";
+    const [path, hash = ""] = destination.split("#");
+    navigate({ to: path, hash, resetScroll: false });
   }, [navigate]);
 
   // Settings changes routes, so the invoking button can be replaced. Restore
@@ -4049,53 +4075,6 @@ flowchart LR
       pendingSettingsFocus = false;
     }
   }, [showSettings, booting]);
-
-  // Put the app into a recorded destination. This is the inverse of `push`: it
-  // restores the route, the document, the section, the search term and the
-  // scroll offset, without recording anything itself (the history suppresses
-  // pushes while it is applying, which is what keeps the forward trail alive).
-  applyNavEntryRef.current = (entry: NavEntry) => {
-    if (pathnameRef.current !== entry.path) navigate({ to: entry.path });
-    setHighlightQuery(entry.query);
-    // A reader entry always names its document. An entry without one is a
-    // non-reader destination (settings), where the open file is left as it is so
-    // coming back out of it lands on the document that was already open.
-    if (entry.fileId) {
-      setActiveFileId(entry.fileId);
-      setActiveHeadingId(entry.headingId);
-    }
-    setDrawerOpen(false);
-    // After the document has painted. Restoring the offset before the content
-    // exists would scroll a short page and land at the top.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => window.scrollTo({ top: entry.scrollY }));
-    });
-  };
-
-  // Seed the trail with wherever the reader landed, so the first back has
-  // somewhere to return to and the first open is not also the first entry.
-  //
-  // Waits for the document, not just for `booting`: hydration sets the open file
-  // and clears the boot flag in the same commit, so an effect keyed on `booting`
-  // alone reads `activeFileId` as null and seeds an entry that restores nothing.
-  // Settings is seeded without one, since it legitimately has no open document.
-  const navSeededRef = useRef(false);
-  useEffect(() => {
-    if (booting || navSeededRef.current) return;
-    if (!activeFileId && !showSettings) return;
-    navSeededRef.current = true;
-    // A trail restored from the session already knows where we are; seeding on
-    // top of it would record the landing twice and make the first back a no-op.
-    if (navHistoryRef.current.canBack || navHistoryRef.current.canForward) return;
-    navHistoryRef.current.push({
-      path: location.pathname,
-      fileId: activeFileId,
-      headingId: activeHeadingId,
-      query: highlightQuery,
-    });
-    // Runs once, on the first render that has somewhere to return to.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booting, activeFileId, showSettings]);
 
   // App-level dismissables. Each is registered while open so back closes it
   // before it walks the trail — the reader's last action was opening the panel,
@@ -4128,21 +4107,17 @@ flowchart LR
     });
   }, [searchOpen, registerEscape]);
 
-  // The browser's own back/gesture is the same intent as the header's back, so
-  // it runs the same code — including closing an open mode first. `popstate`
-  // fires after the router has already moved, so the route is put back when an
-  // escape swallowed the gesture.
-  useEffect(() => {
-    const onPopState = () => {
-      if (navHistoryRef.current.popEscape()) {
-        window.history.forward();
-        return;
-      }
-      navHistoryRef.current.back();
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  useBlocker({
+    enableBeforeUnload: false,
+    shouldBlockFn: ({ next, action }) => {
+      if (action === "BACK" && navHistoryRef.current.popEscape()) return true;
+      const target = readAppRoute(next.pathname);
+      if (target.settings) return false;
+      const leavingWorkspace = target.workspaceId && target.workspaceId !== workspaceIdRef.current;
+      const leavingFile = target.fileId && target.fileId !== activeFileIdRef.current;
+      return !!(leavingWorkspace || leavingFile) && !confirmDiscardDraft(target.fileId);
+    },
+  });
 
   // Ask AI: opened either from the sidebar (no prefill) or from a text-selection
   // quick action in the reader (seeded with the selection + chosen action).
@@ -4365,13 +4340,34 @@ flowchart LR
       const stem = requested.replace(/\.xrule$/i, "").trim() || "Rules";
       ensureWorkspace(1);
       const made = addTextFile(`${stem}.xrule`, RULES_TEMPLATES[template](stem), null);
-      // The first file replaces the empty-workspace view and remounts Settings.
-      pendingSettingsTab = "exams";
-      pendingSettingsRules = made.id;
+      navigate({ to: settingsPath("exams", made.id), replace: true });
       return made;
     },
-    [ensureWorkspace, addTextFile],
+    [ensureWorkspace, addTextFile, navigate],
   );
+
+  const requestNewRuleset = useCallback(() => {
+    const name = window.prompt("Name for the new ruleset:", "Exam rules");
+    if (!name?.trim()) return;
+    const made = createRules(name.trim(), "default");
+    openRulesSettings(made.id);
+  }, [createRules, openRulesSettings]);
+
+  const configuredExam = files.find((f) => f.id === configureExamId && !f.deletedAt);
+  const configureExamDialog = configuredExam ? (
+    <LazyBoundary>
+      <ExamConfigureDialog
+        key={configuredExam.id}
+        file={configuredExam}
+        files={files}
+        folders={folders}
+        onAddRules={addTextFile}
+        onSave={handleContentChange}
+        onEditRules={openRulesSettings}
+        onClose={() => setConfigureExamId(null)}
+      />
+    </LazyBoundary>
+  ) : null;
 
   const moveDialog = (
     <MoveToWorkspaceDialog
@@ -4433,8 +4429,18 @@ flowchart LR
         onImportWorkspace={importWorkspace}
         onExportWorkspace={exportWorkspace}
         onShareWorkspace={shareWorkspace}
-        initialTab={pendingSettingsTab}
-        initialRulesId={pendingSettingsRules}
+        initialTab={appRoute.section}
+        initialRulesId={appRoute.rulesId}
+        initialPracticeId={
+          appRoute.practiceId ??
+          (files.find((f) => f.id === activeFileId)?.kind === "practice"
+            ? (activeFileId ?? undefined)
+            : undefined)
+        }
+        onPracticeChange={(id) => navigate({ to: settingsPath("practice", id) })}
+        onAddTextFile={addTextFile}
+        onTabChange={(tab) => navigate({ to: settingsPath(tab) })}
+        onRulesChange={(id) => navigate({ to: settingsPath("exams", id) })}
         onSaveFile={handleContentChange}
         onCreateRules={createRules}
         onBinFile={binNow}
@@ -4493,23 +4499,109 @@ flowchart LR
       />
     ) : null);
 
-  // Exam Workspaces study `.xam` files in place; the paper needs its siblings
+  // Workspaces study `.xam` files in place; the paper needs its siblings
   // (rules, images) and the folder tree that scopes them.
   const examWorkspace = useMemo<ExamWorkspace | null>(
     () =>
       workspaceId
         ? {
             workspaceId,
-            examEnabled: kind === "exam",
             paused: showSettings,
             files,
             folders,
             openFile: navToFile,
             openRules: openRulesSettings,
+            openPractice: openPracticeSettings,
             addTextFile,
           }
         : null,
-    [kind, workspaceId, showSettings, files, folders, navToFile, openRulesSettings, addTextFile],
+    [
+      workspaceId,
+      showSettings,
+      files,
+      folders,
+      navToFile,
+      openRulesSettings,
+      openPracticeSettings,
+      addTextFile,
+    ],
+  );
+
+  const followNoteReference = useCallback((reference: string, sourceId: string, chosenId?: string) => {
+    const current = snapshotRef.current;
+    const source = current.files.find((file) => file.id === sourceId);
+    if (!source) return;
+    const result = resolveNoteLink(reference, source, current.files, current.folders);
+    const chosen = chosenId ? current.files.find((file) => file.id === chosenId && !file.deletedAt) : undefined;
+    const target = chosen ?? (result.status === "found" ? result.file : undefined);
+    if (target) {
+      const fragment = splitNoteReference(reference).fragment;
+      const span = noteTargetSpan(target.content, fragment);
+      if (fragment && !span) { toast.error(`Couldn't find ${fragment} in ${target.name}.`); return; }
+      let heading: string | undefined;
+      if (span) {
+        let offset = 0;
+        for (const chunk of fileSubtopics(target)) {
+          const start = target.content.indexOf(chunk.content, offset);
+          if (start < 0) continue;
+          if (start <= span.start) heading = chunk.id;
+          offset = start + chunk.content.length;
+        }
+      }
+      if (!handleSelect(target.id, heading)) return;
+      if (span) setPendingSaved({ fileId: target.id, span, text: target.content.slice(span.start, span.end) });
+      return;
+    }
+    if (result.status === "ambiguous") { toast.error("Several notes match. Use a folder path or choose a note from the link."); return; }
+    const { name } = splitNoteReference(reference);
+    if (!name || name.startsWith("@") || /[\\\n\r:*?"<>|]/.test(name)) { toast.error("Use a note name or a folder/note path."); return; }
+    const path = normalizePath(name.startsWith("/") || (name.includes("/") && !/^\.\.?\//.test(name)) ? name : `${folderPath(source.folderId, current.folders)}/${name}`);
+    if (!path) { toast.error("This note path is outside the workspace."); return; }
+    const parts = path.split("/");
+    const requested = parts.pop()!;
+    if (/\.[a-z\d]+$/i.test(requested) && !/\.(md|markdown|mdx|txt)$/i.test(requested)) { toast.error("Upload the referenced attachment to open it."); return; }
+    if (!confirmDiscardDraft("new-note")) return;
+    const nextFolders = [...current.folders];
+    let parentId: string | null = null;
+    for (const part of parts) {
+      let folder = nextFolders.find((item) => (item.parentId ?? null) === parentId && item.name.toLowerCase() === part.toLowerCase());
+      if (!folder) { folder = { id: crypto.randomUUID(), name: part, parentId, createdAt: Date.now() }; nextFolders.push(folder); }
+      parentId = folder.id;
+    }
+    const fileName = /\.(md|markdown|mdx|txt)$/i.test(requested) ? requested : `${requested}.md`;
+    const id = crypto.randomUUID();
+    const file: MdFile = { id, name: fileName, content: "", kind: "markdown", folderId: parentId, mimeType: "text/markdown", addedAt: Date.now(), headings: [] };
+    setFolders(nextFolders);
+    setFiles((prev) => [...prev, file]);
+    setActiveFileId(id);
+    setActiveHeadingId(null);
+    preloadMarkdownViewer();
+    preloadMarkdownEditor();
+    setAutoEditFileId(id);
+    setDrawerOpen(false);
+    markDirty();
+  }, [handleSelect, markDirty]);
+  const workspaceLinks = useMemo(() => ({ files, folders, links: noteLinks, follow: followNoteReference }), [files, folders, noteLinks, followNoteReference]);
+
+  const routeNotice = routeError && (
+    <div
+      role="alert"
+      className="fixed bottom-5 left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 rounded-lg border border-border bg-background p-4 text-sm shadow-lg"
+    >
+      {routeError}
+      <button
+        className="ml-3 underline"
+        onClick={() => {
+          setRouteError(null);
+          navigate({
+            to: workspaceId ? workspacePath(workspaceId, activeFileId) : "/",
+            replace: true,
+          });
+        }}
+      >
+        Open current workspace
+      </button>
+    </div>
   );
 
   if (booting) {
@@ -4532,13 +4624,20 @@ flowchart LR
         shareDialog={shareDialog}
         settingsDialog={settingsDialog}
         moveDialog={moveDialog}
-        statusBanner={statusBanner}
+        statusBanner={
+          <>
+            {statusBanner}
+            {routeNotice}
+          </>
+        }
       />
     );
   }
 
   return (
     <NavHistoryContext.Provider value={navHistory}>
+      <WorkspaceLinksContext.Provider value={workspaceLinks}>
+      {routeNotice}
       <ExamWorkspaceContext.Provider value={examWorkspace}>
         <DraftJournalContext.Provider value={journalContext}>
           <div className="min-h-dvh bg-background">
@@ -4590,13 +4689,15 @@ flowchart LR
                     onShareFiles={(ids) => void shareFiles(ids)}
                     onRenameFile={renameFile}
                     onEditFile={editFile}
+                    onConfigureExam={setConfigureExamId}
                     onConvertFile={conversion.start}
                     convertingFileId={conversion.runningId}
                     folders={folders}
                     onCreateFile={createFile}
                     onCreateMermaid={createMermaidFile}
                     onCreateBoard={createBoardFile}
-                    onCreateExam={() => setNewExamOpen(true)}
+                    onCreateExam={openNewExam}
+                    onCreateRules={requestNewRuleset}
                     onCreatePractice={createPracticeFile}
                     onCreateFolder={createFolder}
                     onRenameFolder={renameFolder}
@@ -4619,8 +4720,6 @@ flowchart LR
                       workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
                     }
                     onClearStorage={clearAllStorage}
-                    highlights={highlights}
-                    onRemoveHighlight={removeHighlight}
                     onOpenSettings={openSettings}
                     onAddToSplit={openBeside}
                     splitFileIds={splitFileIds}
@@ -4688,7 +4787,8 @@ flowchart LR
                     onCreateMermaid={() => createMermaidFile(null)}
                     onCreateBoard={() => createBoardFile(null)}
                     onCreateFolder={promptNewFolderFromRail}
-                    onCreateExam={() => setNewExamOpen(true)}
+                    onCreateExam={openNewExam}
+                    onCreateRules={requestNewRuleset}
                     onCreatePractice={() => createPracticeFile(null)}
                     onUpload={() => inputRef.current?.click()}
                     buttonClassName={CHROME_BUTTON}
@@ -4782,13 +4882,15 @@ flowchart LR
                       onShareFiles={(ids) => void shareFiles(ids)}
                       onRenameFile={renameFile}
                       onEditFile={editFile}
+                      onConfigureExam={setConfigureExamId}
                       onConvertFile={conversion.start}
                       convertingFileId={conversion.runningId}
                       folders={folders}
                       onCreateFile={createFile}
                       onCreateMermaid={createMermaidFile}
                       onCreateBoard={createBoardFile}
-                      onCreateExam={() => setNewExamOpen(true)}
+                      onCreateExam={openNewExam}
+                      onCreateRules={requestNewRuleset}
                       onCreatePractice={createPracticeFile}
                       onCreateFolder={createFolder}
                       onRenameFolder={renameFolder}
@@ -4811,8 +4913,6 @@ flowchart LR
                         workspaceIdRef.current && void deleteWorkspace(workspaceIdRef.current)
                       }
                       onClearStorage={clearAllStorage}
-                      highlights={highlights}
-                      onRemoveHighlight={removeHighlight}
                       onOpenSettings={(tab) => {
                         setDrawerOpen(false);
                         openSettings(tab);
@@ -4942,7 +5042,6 @@ flowchart LR
                                         <PaneDocument
                                           file={paneFile}
                                           files={files}
-                                          highlights={highlights}
                                           workspaceFolders={folders}
                                           onImportAttachments={importAttachments}
                                           workspaceId={workspaceId}
@@ -4956,10 +5055,6 @@ flowchart LR
                                             syncEditorDirty();
                                           }}
                                           onRenameFile={renameFile}
-                                          onAddHighlight={addHighlight}
-                                          onUpdateHighlight={updateHighlight}
-                                          onRemoveHighlight={removeHighlight}
-                                          onRepairHighlights={repairHighlights}
                                           onOpenArtifact={openEmbeddedArtifact}
                                           readingMode={readingMode}
                                           contentWidth={contentWidth}
@@ -5001,7 +5096,7 @@ flowchart LR
                                               : null
                                           }
                                           onSavedShown={clearPendingSaved}
-                                          onCopyToNotes={addNote}
+                                          onAnnotated={onAnnotated}
                                           onToggleNotes={toggleNotes}
                                           notesOpen={notesOpen}
                                         />
@@ -5034,11 +5129,6 @@ flowchart LR
                           startInEditFileId={autoEditFileId}
                           onStartInEditConsumed={consumeStartInEdit}
                           nextReadingMin={nextReadingMinutes}
-                          highlights={activeFileHighlights}
-                          onAddHighlight={addHighlightToActive}
-                          onUpdateHighlight={updateHighlight}
-                          onRemoveHighlight={removeHighlight}
-                          onRepairHighlights={repairHighlights}
                           pendingSaved={
                             pendingSaved?.fileId === activeFile.id ? pendingSaved : null
                           }
@@ -5051,7 +5141,7 @@ flowchart LR
                           onRenameFile={renameActiveFile}
                           onShareFile={shareActiveFile}
                           onAskAi={aiEnabled ? askAiFromSelection : undefined}
-                          onCopyToNotes={copyToNotesFromActive}
+                          onAnnotated={onAnnotated}
                           onToggleNotes={toggleNotes}
                           notesOpen={notesOpen}
                           readingMode={readingMode}
@@ -5099,18 +5189,15 @@ flowchart LR
                   <LazyBoundary>
                     <NotesPanel
                       variant="docked"
-                      notes={sortedNotes}
+                      entries={entries}
                       fileName={noteFileName}
-                      sourceState={noteSourceState}
-                      onOpenSource={openNoteSource}
+                      entrySection={entrySection}
+                      onOpen={openEntry}
                       onUpdate={updateNote}
-                      onRemove={removeNote}
-                      highlights={highlights}
-                      highlightSection={highlightSection}
-                      onOpenHighlight={openHighlight}
-                      onRemoveHighlight={removeHighlightFromNotes}
+                      onRemove={removeEntry}
+                      onMoveToRoughWork={moveToRoughWork}
                       onClose={closeNotes}
-                      freshId={freshNoteId}
+                      freshId={freshEntryId}
                       mathRenderer={mathPreferences.renderer}
                       tab={notesTab}
                       onTabChange={setNotesTab}
@@ -5127,18 +5214,15 @@ flowchart LR
                 <LazyBoundary>
                   <NotesPanel
                     variant="sheet"
-                    notes={sortedNotes}
+                    entries={entries}
                     fileName={noteFileName}
-                    sourceState={noteSourceState}
-                    onOpenSource={openNoteSource}
+                    entrySection={entrySection}
+                    onOpen={openEntry}
                     onUpdate={updateNote}
-                    onRemove={removeNote}
-                    highlights={highlights}
-                    highlightSection={highlightSection}
-                    onOpenHighlight={openHighlight}
-                    onRemoveHighlight={removeHighlightFromNotes}
+                    onRemove={removeEntry}
+                    onMoveToRoughWork={moveToRoughWork}
                     onClose={closeNotes}
-                    freshId={freshNoteId}
+                    freshId={freshEntryId}
                     mathRenderer={mathPreferences.renderer}
                     tab={notesTab}
                     onTabChange={setNotesTab}
@@ -5184,6 +5268,7 @@ flowchart LR
             {moveDialog}
             {binDialog}
             {newExamDialog}
+            {configureExamDialog}
 
             {dragOverlay}
             {shareDialog}
@@ -5191,6 +5276,7 @@ flowchart LR
           </div>
         </DraftJournalContext.Provider>
       </ExamWorkspaceContext.Provider>
+      </WorkspaceLinksContext.Provider>
     </NavHistoryContext.Provider>
   );
 }

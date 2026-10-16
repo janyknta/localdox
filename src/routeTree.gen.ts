@@ -9,104 +9,260 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as ExamsRouteImport } from './routes/exams'
-import { Route as MdReaderRouteImport } from './routes/md-reader'
-import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as AppIndexRouteImport } from './routes/_app.index'
+import { Route as AppExamsRouteImport } from './routes/_app.exams'
+import { Route as AppMdReaderRouteImport } from './routes/_app.md-reader'
+import { Route as AppSettingsRouteImport } from './routes/_app.settings'
+import { Route as AppSettingsSectionRouteImport } from './routes/_app.settings.$section'
+import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app.workspaces.$workspaceId'
+import { Route as AppSettingsSectionRulesIdRouteImport } from './routes/_app.settings.$section.$rulesId'
+import { Route as AppWorkspacesWorkspaceIdFilesFileIdRouteImport } from './routes/_app.workspaces.$workspaceId.files.$fileId'
 
-const IndexRoute = IndexRouteImport.update({
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const ExamsRoute = ExamsRouteImport.update({
+const AppExamsRoute = AppExamsRouteImport.update({
   id: '/exams',
   path: '/exams',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const MdReaderRoute = MdReaderRouteImport.update({
+const AppMdReaderRoute = AppMdReaderRouteImport.update({
   id: '/md-reader',
   path: '/md-reader',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const SettingsRoute = SettingsRouteImport.update({
+const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsSectionRoute = AppSettingsSectionRouteImport.update({
+  id: '/$section',
+  path: '/$section',
+  getParentRoute: () => AppSettingsRoute,
+} as any)
+const AppWorkspacesWorkspaceIdRoute =
+  AppWorkspacesWorkspaceIdRouteImport.update({
+    id: '/workspaces/$workspaceId',
+    path: '/workspaces/$workspaceId',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppSettingsSectionRulesIdRoute =
+  AppSettingsSectionRulesIdRouteImport.update({
+    id: '/$rulesId',
+    path: '/$rulesId',
+    getParentRoute: () => AppSettingsSectionRoute,
+  } as any)
+const AppWorkspacesWorkspaceIdFilesFileIdRoute =
+  AppWorkspacesWorkspaceIdFilesFileIdRouteImport.update({
+    id: '/files/$fileId',
+    path: '/files/$fileId',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/exams': typeof ExamsRoute
-  '/md-reader': typeof MdReaderRoute
-  '/settings': typeof SettingsRoute
+  '/': typeof AppIndexRoute
+  '/exams': typeof AppExamsRoute
+  '/md-reader': typeof AppMdReaderRoute
+  '/settings': typeof AppSettingsRouteWithChildren
+  '/settings/$section': typeof AppSettingsSectionRouteWithChildren
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
+  '/settings/$section/$rulesId': typeof AppSettingsSectionRulesIdRoute
+  '/workspaces/$workspaceId/files/$fileId': typeof AppWorkspacesWorkspaceIdFilesFileIdRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/exams': typeof ExamsRoute
-  '/md-reader': typeof MdReaderRoute
-  '/settings': typeof SettingsRoute
+  '/exams': typeof AppExamsRoute
+  '/md-reader': typeof AppMdReaderRoute
+  '/settings': typeof AppSettingsRouteWithChildren
+  '/': typeof AppIndexRoute
+  '/settings/$section': typeof AppSettingsSectionRouteWithChildren
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
+  '/settings/$section/$rulesId': typeof AppSettingsSectionRulesIdRoute
+  '/workspaces/$workspaceId/files/$fileId': typeof AppWorkspacesWorkspaceIdFilesFileIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/exams': typeof ExamsRoute
-  '/md-reader': typeof MdReaderRoute
-  '/settings': typeof SettingsRoute
+  '/_app': typeof AppRouteWithChildren
+  '/_app/exams': typeof AppExamsRoute
+  '/_app/md-reader': typeof AppMdReaderRoute
+  '/_app/settings': typeof AppSettingsRouteWithChildren
+  '/_app/': typeof AppIndexRoute
+  '/_app/settings/$section': typeof AppSettingsSectionRouteWithChildren
+  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
+  '/_app/settings/$section/$rulesId': typeof AppSettingsSectionRulesIdRoute
+  '/_app/workspaces/$workspaceId/files/$fileId': typeof AppWorkspacesWorkspaceIdFilesFileIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/exams' | '/md-reader' | '/settings'
+  fullPaths:
+    | '/'
+    | '/exams'
+    | '/md-reader'
+    | '/settings'
+    | '/settings/$section'
+    | '/workspaces/$workspaceId'
+    | '/settings/$section/$rulesId'
+    | '/workspaces/$workspaceId/files/$fileId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/exams' | '/md-reader' | '/settings'
-  id: '__root__' | '/' | '/exams' | '/md-reader' | '/settings'
+  to:
+    | '/exams'
+    | '/md-reader'
+    | '/settings'
+    | '/'
+    | '/settings/$section'
+    | '/workspaces/$workspaceId'
+    | '/settings/$section/$rulesId'
+    | '/workspaces/$workspaceId/files/$fileId'
+  id:
+    | '__root__'
+    | '/_app'
+    | '/_app/exams'
+    | '/_app/md-reader'
+    | '/_app/settings'
+    | '/_app/'
+    | '/_app/settings/$section'
+    | '/_app/workspaces/$workspaceId'
+    | '/_app/settings/$section/$rulesId'
+    | '/_app/workspaces/$workspaceId/files/$fileId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  ExamsRoute: typeof ExamsRoute
-  MdReaderRoute: typeof MdReaderRoute
-  SettingsRoute: typeof SettingsRoute
+  AppRoute: typeof AppRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/': {
+      id: '/_app/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/exams': {
-      id: '/exams'
+    '/_app/exams': {
+      id: '/_app/exams'
       path: '/exams'
       fullPath: '/exams'
-      preLoaderRoute: typeof ExamsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppExamsRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/md-reader': {
-      id: '/md-reader'
+    '/_app/md-reader': {
+      id: '/_app/md-reader'
       path: '/md-reader'
       fullPath: '/md-reader'
-      preLoaderRoute: typeof MdReaderRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppMdReaderRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/settings': {
-      id: '/settings'
+    '/_app/settings': {
+      id: '/_app/settings'
       path: '/settings'
       fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/$section': {
+      id: '/_app/settings/$section'
+      path: '/$section'
+      fullPath: '/settings/$section'
+      preLoaderRoute: typeof AppSettingsSectionRouteImport
+      parentRoute: typeof AppSettingsRoute
+    }
+    '/_app/workspaces/$workspaceId': {
+      id: '/_app/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/$section/$rulesId': {
+      id: '/_app/settings/$section/$rulesId'
+      path: '/$rulesId'
+      fullPath: '/settings/$section/$rulesId'
+      preLoaderRoute: typeof AppSettingsSectionRulesIdRouteImport
+      parentRoute: typeof AppSettingsSectionRoute
+    }
+    '/_app/workspaces/$workspaceId/files/$fileId': {
+      id: '/_app/workspaces/$workspaceId/files/$fileId'
+      path: '/files/$fileId'
+      fullPath: '/workspaces/$workspaceId/files/$fileId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdFilesFileIdRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
   }
 }
 
+interface AppSettingsSectionRouteChildren {
+  AppSettingsSectionRulesIdRoute: typeof AppSettingsSectionRulesIdRoute
+}
+
+const AppSettingsSectionRouteChildren: AppSettingsSectionRouteChildren = {
+  AppSettingsSectionRulesIdRoute: AppSettingsSectionRulesIdRoute,
+}
+
+const AppSettingsSectionRouteWithChildren =
+  AppSettingsSectionRoute._addFileChildren(AppSettingsSectionRouteChildren)
+
+interface AppSettingsRouteChildren {
+  AppSettingsSectionRoute: typeof AppSettingsSectionRouteWithChildren
+}
+
+const AppSettingsRouteChildren: AppSettingsRouteChildren = {
+  AppSettingsSectionRoute: AppSettingsSectionRouteWithChildren,
+}
+
+const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
+  AppSettingsRouteChildren,
+)
+
+interface AppWorkspacesWorkspaceIdRouteChildren {
+  AppWorkspacesWorkspaceIdFilesFileIdRoute: typeof AppWorkspacesWorkspaceIdFilesFileIdRoute
+}
+
+const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
+  {
+    AppWorkspacesWorkspaceIdFilesFileIdRoute:
+      AppWorkspacesWorkspaceIdFilesFileIdRoute,
+  }
+
+const AppWorkspacesWorkspaceIdRouteWithChildren =
+  AppWorkspacesWorkspaceIdRoute._addFileChildren(
+    AppWorkspacesWorkspaceIdRouteChildren,
+  )
+
+interface AppRouteChildren {
+  AppExamsRoute: typeof AppExamsRoute
+  AppMdReaderRoute: typeof AppMdReaderRoute
+  AppSettingsRoute: typeof AppSettingsRouteWithChildren
+  AppIndexRoute: typeof AppIndexRoute
+  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRouteWithChildren
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppExamsRoute: AppExamsRoute,
+  AppMdReaderRoute: AppMdReaderRoute,
+  AppSettingsRoute: AppSettingsRouteWithChildren,
+  AppIndexRoute: AppIndexRoute,
+  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRouteWithChildren,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  ExamsRoute: ExamsRoute,
-  MdReaderRoute: MdReaderRoute,
-  SettingsRoute: SettingsRoute,
+  AppRoute: AppRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

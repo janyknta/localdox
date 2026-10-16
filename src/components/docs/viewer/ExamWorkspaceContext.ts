@@ -4,12 +4,10 @@ import type { MdFile } from "@/lib/markdown/markdown-utils";
 /**
  * What an `.xam` needs from its workspace to be studied in place: the other
  * files (its rules and images), the folders that scope those rules, and the
- * actions it takes on them. Practice uses these in every workspace; timed
- * exams run only when examEnabled is true.
+ * actions it takes on them. Exam and practice files run in every workspace.
  */
 export interface ExamWorkspace {
   workspaceId: string;
-  examEnabled: boolean;
   /**
    * Settings is open over the reader. The paper lets go of exam storage (its
    * writer lock) so Settings can manage or delete exam data.
@@ -19,6 +17,8 @@ export interface ExamWorkspace {
   folders: { id: string; parentId?: string | null }[];
   /** Show a ruleset where rulesets are edited: Settings ▸ Exam rules. */
   openRules: (fileId: string) => void;
+  /** Open a practice file’s controls in the Settings modal. */
+  openPractice: (fileId: string) => void;
   /**
    * Adds a text file beside the others without opening it. Returns its id and
    * the name it got, which differs from the one asked for when that is taken.

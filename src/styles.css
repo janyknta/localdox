@@ -4,6 +4,32 @@
 @import "highlight.js/styles/github.css";
 @import "./services/diagrams/diagram-colors.css";
 
+/* Editing keeps one document and history; inactive Markdown becomes readable. */
+.cm-live-preview .cm-scroller { font-family: var(--font-body); font-size: 1rem; line-height: 1.75; }
+.cm-live-preview .cm-line { padding-block: .125rem; }
+.cm-live-preview .cm-live-empty { font-size: .5rem; line-height: 1; padding-block: .125rem; }
+.cm-live-preview :is(.cm-live-h1,.cm-live-h2,.cm-live-h3,.cm-live-h4,.cm-live-h5,.cm-live-h6) { font-family: var(--font-heading); color: var(--foreground); }
+.cm-live-preview :is(.cm-live-h1,.cm-live-h2,.cm-live-h3,.cm-live-h4,.cm-live-h5,.cm-live-h6) span { color: inherit; }
+.cm-live-preview .cm-live-h1 { font-size: 1.9rem; line-height: 1.25; padding-block: .7rem .35rem; }
+.cm-live-preview .cm-live-h2 { font-size: 1.5rem; line-height: 1.35; padding-block: .55rem .25rem; }
+.cm-live-preview .cm-live-h3 { font-size: 1.25rem; padding-block: .35rem .15rem; }
+.cm-live-preview :is(.cm-live-h4,.cm-live-h5,.cm-live-h6) { font-weight: 650; }
+.cm-live-strong { font-weight: 700; }
+.cm-live-emphasis { font-style: italic; }
+.cm-live-strike { text-decoration: line-through; }
+.cm-live-code { font-family: var(--font-mono); background: var(--muted); border-radius: .2rem; }
+.cm-live-block { position: relative; margin: .5rem 1rem; max-width: calc(100% - 2rem); }
+.cm-live-preview .cm-live-block.docs-prose { --bleed: 0rem; font-size: 1rem; }
+.cm-live-block > div > :is(pre,blockquote,aside,.docs-table-wrap,figure) { margin-block: .5rem; }
+.cm-live-edit { position: absolute; top: .2rem; right: .2rem; z-index: 1; padding: .2rem .5rem; border: 1px solid var(--border); border-radius: .3rem; background: var(--background); color: var(--muted-foreground); font: .7rem var(--font-ui); opacity: 0; }
+.cm-live-block:is(:hover,:focus-within) .cm-live-edit { opacity: 1; }
+.cm-live-edit:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.cm-live-inline :is(div,p) { display: inline; margin: 0; }
+.cm-live-inline img { display: inline-block; max-height: 12rem; vertical-align: middle; }
+.docs-note-link { color: var(--primary); text-decoration: underline; text-underline-offset: .18em; }
+.docs-note-link-unresolved { text-decoration-style: dashed; }
+@media (pointer: coarse) { .cm-live-edit { opacity: 1; min-height: 44px; } }
+
 /* Fonts and KaTeX's stylesheet are deliberately NOT imported here.
  *
  * They are fetched on demand — see `src/lib/fonts/fonts.ts`:
@@ -994,6 +1020,57 @@
   margin-inline: 0;
 }
 .docs-prose .docs-callout > .docs-callout-body > :last-child {
+  margin-bottom: 0;
+}
+
+/*
+ * A note kept in the document (```note), or a highlight whose passage is gone
+ * (lib/markdown/annotations.ts). The reader's own words, so quieter than an
+ * authored callout: a rule and a tint rather than a box, and a small label in
+ * place of a margin icon. A highlight's card takes its colour.
+ */
+.docs-annotation {
+  --annotation: var(--muted-foreground);
+  margin: 1.25rem 0;
+  padding: 0.6rem 0.95rem 0.7rem;
+  border-left: 3px solid var(--annotation);
+  border-radius: 0 0.6rem 0.6rem 0;
+  background: color-mix(in oklab, var(--annotation) 7%, var(--background));
+}
+.docs-annotation[data-orphan] {
+  background: color-mix(in oklab, var(--annotation) 16%, var(--background));
+}
+.docs-prose .docs-annotation-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: none;
+  margin: 0 0 0.3rem;
+  color: var(--muted-foreground);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  user-select: none;
+}
+.docs-annotation-tag {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docs-annotation-tag::before {
+  content: "· ";
+  color: var(--muted-foreground);
+}
+.docs-prose .docs-annotation :is(p, ul, ol) {
+  max-width: none;
+  margin-inline: 0;
+}
+.docs-prose .docs-annotation > :last-child {
   margin-bottom: 0;
 }
 
@@ -2202,4 +2279,69 @@ mjx-container[jax="CHTML"] {
   margin-bottom: 0.35rem;
   font-size: 0.75rem;
   color: var(--muted-foreground);
+}
+
+/* Markdown's heading hierarchy grows downward from the file. Each branch
+   owns its connecting rail, so differently sized subtrees never overlap. */
+.md-outline-branch {
+  --tree-gap: 1.25rem;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: max-content;
+  margin: 0;
+  padding: var(--tree-gap) 0 0;
+  list-style: none;
+}
+.md-outline-branch::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 50%;
+  height: var(--tree-gap);
+  border-left: 1px solid var(--muted-foreground);
+}
+.md-outline-tree > .md-outline-branch {
+  margin-inline: auto;
+}
+.md-outline-branch > li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--tree-gap) 0.75rem 0;
+}
+.md-outline-branch > li::before,
+.md-outline-branch > li::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 50%;
+  height: var(--tree-gap);
+  border-top: 1px solid var(--muted-foreground);
+}
+.md-outline-branch > li::before {
+  right: 50%;
+}
+.md-outline-branch > li::after {
+  left: 50%;
+  border-left: 1px solid var(--muted-foreground);
+}
+.md-outline-branch > li:first-child::before,
+.md-outline-branch > li:last-child::after {
+  display: none;
+}
+.md-outline-branch > li:first-child::after {
+  border-top-left-radius: 0.5rem;
+}
+.md-outline-branch > li:last-child::before {
+  border-right: 1px solid var(--muted-foreground);
+  border-top-right-radius: 0.5rem;
+}
+.md-outline-branch > li:only-child::after {
+  display: block;
+  width: 0;
+  border-top: 0;
+  border-radius: 0;
 }

@@ -109,9 +109,9 @@ test("integrity rules are sentences, not config", () => {
   });
   assert.equal(
     ruleSentences(r)[0],
-    "Leaving fullscreen or switching tabs more than 3 times submits your exam.",
+    "Leaving fullscreen or the exam window more than 3 times submits your exam.",
   );
-  assert.equal(violationCopy(r, 1), "Warning 1 of 3: stay in fullscreen.");
+  assert.equal(violationCopy(r, 1), "Warning 1 of 3: stay in fullscreen and in the exam window.");
 });
 
 test("status counts partition answered / not answered / not visited", () => {

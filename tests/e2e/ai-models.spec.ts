@@ -41,7 +41,8 @@ async function saveKey(page: Page) {
   await expect(row.getByRole("button", { name: "Remove Google Gemini key" })).toBeVisible();
 }
 
-const modelSelect = (page: Page) => page.locator("select:has(optgroup)");
+const modelSelect = (page: Page) =>
+  page.getByRole("combobox", { name: "Default model", exact: true });
 
 const savedConfig = (page: Page) =>
   page.evaluate(() => JSON.parse(localStorage.getItem("localdox:ai-config") ?? "null"));
@@ -52,15 +53,18 @@ test("only current Gemini models are offered, and the key travels in a header", 
   const seen = await google(page);
   await saveKey(page);
 
-  const options = await modelSelect(page)
-    .locator('optgroup[label^="Google Gemini"] option')
+  await modelSelect(page).click();
+  const options = await page
+    .getByRole("group", { name: /^Google Gemini/ })
+    .getByRole("option")
     .allTextContents();
   expect(options).toEqual([
     "Gemini 3.8 Flash",
     "Gemini 3.5 Flash-Lite",
     "Gemini 3.1 Pro (preview)",
   ]);
-  await expect(modelSelect(page)).toHaveValue("gemini-3.8-flash");
+  await page.keyboard.press("Escape");
+  await expect(modelSelect(page)).toHaveText("Gemini 3.8 Flash");
 
   expect(seen.length).toBeGreaterThan(0);
   for (const request of seen) {
@@ -81,7 +85,7 @@ test("a saved retired model migrates to its replacement", async ({ page }) => {
 
   await page.reload();
   await page.getByRole("tab", { name: "Ask AI" }).click();
-  await expect(modelSelect(page)).toHaveValue("gemini-3.1-pro-preview");
+  await expect(modelSelect(page)).toHaveText("Gemini 3.1 Pro (preview)");
   expect(await savedConfig(page)).toEqual({
     defaultProvider: "gemini",
     defaultModel: "gemini-3.1-pro-preview",
@@ -101,10 +105,15 @@ test("a model the key can't use is greyed out and the default moves off it", asy
   await page.reload();
   await page.getByRole("tab", { name: "Ask AI" }).click();
 
-  const pro = modelSelect(page).locator('option[value="gemini-3.1-pro-preview"]');
+  await modelSelect(page).click();
+  const pro = page.getByRole("option", {
+    name: "Gemini 3.1 Pro (preview) (not available to your key)",
+    exact: true,
+  });
   await expect(pro).toBeDisabled();
   await expect(pro).toHaveText("Gemini 3.1 Pro (preview) (not available to your key)");
-  await expect(modelSelect(page)).toHaveValue("gemini-3.8-flash");
+  await page.keyboard.press("Escape");
+  await expect(modelSelect(page)).toHaveText("Gemini 3.8 Flash");
   await expect(page.getByRole("status").filter({ hasText: "can't use" })).toHaveText(
     "Your Google Gemini key can't use Gemini 3.1 Pro (preview), so Ask AI now uses Gemini 3.8 Flash.",
   );

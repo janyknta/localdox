@@ -1,9 +1,16 @@
-import { useContext } from "react";
+import { useContext, type ComponentProps, type ReactNode } from "react";
+import type { ExtraProps } from "react-markdown";
 import { ChevronDown } from "lucide-react";
 import { slugify } from "@/lib/markdown/markdown-utils";
 import { CollapseContext } from "./contexts";
 
-export function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) {
+type HeadingProps = ComponentProps<"h1"> &
+  ExtraProps & {
+    as: "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+    highlight?: (text: string) => ReactNode;
+  };
+
+export function HeadingLink({ as: Tag, children, id, highlight, ...rest }: HeadingProps) {
   const collapse = useContext(CollapseContext);
   const text = Array.isArray(children)
     ? children.map((c) => (typeof c === "string" ? c : "")).join("")
@@ -31,8 +38,8 @@ export function HeadingLink({ as: Tag, children, id, highlight, ...rest }: any) 
              44px without moving it: the margin it sits in is narrower than 44px
              at this breakpoint, so growing the box itself would push it off the
              side of the screen. */
-          className={`absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] md:flex ${
-            collapsed
+          className={`${collapse.showControls ? "relative mr-2 inline-flex h-6 w-6 align-middle" : "absolute -left-7 top-1/2 hidden h-6 w-6 -translate-y-1/2 md:flex"} items-center justify-center rounded text-muted-foreground transition-opacity hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:opacity-100 coarse:before:absolute coarse:before:-inset-2.5 coarse:before:content-[''] ${
+            collapsed || collapse.showControls
               ? "opacity-100"
               : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 coarse:opacity-100"
           }`}

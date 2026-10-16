@@ -51,6 +51,23 @@ export function gateXruleTemplate(name: string): string {
   )}\n`;
 }
 
+/** GATE controls for an uploaded mock, sized to its actual question count. */
+export function gateMockXruleTemplate(name: string, questionCount: number): string {
+  return `${JSON.stringify(
+    {
+      xrule: 1,
+      name: name.trim() || "GATE mock",
+      preset: "gate",
+      questionCount,
+      durationMinutes: Math.min(180, Math.max(1, Math.ceil((questionCount * 180) / 65))),
+      passPercentage: 25,
+      maxAttempts: 3,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 /** Rulesets Settings ▸ Exam rules can start from. */
 export function practiceXruleTemplate(name: string): string {
   return `${JSON.stringify(
@@ -60,7 +77,8 @@ export function practiceXruleTemplate(name: string): string {
       practice: {
         questionTimeLimitSeconds: null,
         showElapsedTime: true,
-        allowSkip: true,
+        showProgress: true,
+        pauseOnTabLeave: true,
       },
     },
     null,

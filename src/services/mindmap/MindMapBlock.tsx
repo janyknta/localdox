@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Expand, Minimize2 } from "lucide-react";
 import { buildMindMap, type MindMapNode } from "./mindmap";
+import { JsonTree } from "@/components/docs/viewer/JsonTree";
 
 /**
  * A ```mindmap fence in a markdown document, rendered the way ```mermaid is.
@@ -76,7 +77,7 @@ export function MindMapBlock({ code, title }: { code: string; title?: string }) 
     );
   }
 
-  return <MindMapFigure tree={tree} />;
+  return <MindMapFigure tree={tree} code={code} />;
 }
 
 /**
@@ -88,9 +89,17 @@ export function MindMapBlock({ code, title }: { code: string; title?: string }) 
  * and keeps it the same live component — so the open branches, the selection
  * and the inspector all survive going in and coming back out.
  */
-function MindMapFigure({ tree }: { tree: NonNullable<ReturnType<typeof buildMindMap>> }) {
+function MindMapFigure({
+  tree,
+  code,
+}: {
+  tree: NonNullable<ReturnType<typeof buildMindMap>>;
+  code: string;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [full, setFull] = useState(false);
+  const [mode, setMode] = useState<"mindmap" | "json">("mindmap");
+  const value = useMemo(() => JSON.parse(code) as unknown, [code]);
   // The details panel for the selected node, lifted out of the map.
   //
   // Inside the embed it sat on top of the drawing, and the embed is only a few
@@ -123,8 +132,26 @@ function MindMapFigure({ tree }: { tree: NonNullable<ReturnType<typeof buildMind
         full ? "flex h-screen w-screen flex-col" : "my-6 rounded-xl border border-border"
       }`}
     >
-      <div className="flex items-center justify-end border-b border-border/70 bg-background/40 px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2 border-b border-border/70 bg-background/40 px-2 py-1.5">
+        <div role="group" aria-label="Embed view" className="flex items-center gap-1">
+          {(["mindmap", "json"] as const).map((view) => (
+            <button
+              key={view}
+              type="button"
+              aria-pressed={mode === view}
+              onClick={() => setMode(view)}
+              className={`rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                mode === view
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+            >
+              {view === "mindmap" ? "Mindmap" : "JSON"}
+            </button>
+          ))}
+        </div>
         <button
+          type="button"
           onClick={toggle}
           title={full ? "Exit full screen" : "Full screen"}
           aria-label={full ? "Exit full screen" : "Full screen"}
@@ -133,30 +160,38 @@ function MindMapFigure({ tree }: { tree: NonNullable<ReturnType<typeof buildMind
           {full ? <Minimize2 className="h-3.5 w-3.5" /> : <Expand className="h-3.5 w-3.5" />}
         </button>
       </div>
-      <div className={`relative ${full ? "min-h-0 flex-1" : ""}`}>
-        <Suspense fallback={<MapPlaceholder />}>
-          {/* Bounded height: inside a document the map is a figure, not a page,
+      {mode === "json" ? (
+        <div
+          className={full ? "min-h-0 flex-1 overflow-auto *:min-h-full" : "max-h-128 overflow-auto"}
+        >
+          <JsonTree value={value} />
+        </div>
+      ) : (
+        <div className={`relative ${full ? "min-h-0 flex-1" : ""}`}>
+          <Suspense fallback={<MapPlaceholder />}>
+            {/* Bounded height: inside a document the map is a figure, not a page,
               and it must not grow past the text it belongs to. Full screen is
               the exception, and there it fills what it is given. */}
-          <MindMapView
-            tree={tree}
-            embedded={!full}
-            fill={full}
-            onInspect={full ? undefined : setInspected}
-          />
-        </Suspense>
-        {!full && inspected && (
-          <div className="pointer-events-none absolute inset-0 z-10">
-            <div className="pointer-events-auto">
-              {/* Its own boundary: this sits outside the map's Suspense, and a
+            <MindMapView
+              tree={tree}
+              embedded={!full}
+              fill={full}
+              onInspect={full ? undefined : setInspected}
+            />
+          </Suspense>
+          {!full && inspected && (
+            <div className="pointer-events-none absolute inset-0 z-10">
+              <div className="pointer-events-auto">
+                {/* Its own boundary: this sits outside the map's Suspense, and a
                   lazy component with nothing to catch it throws on first use. */}
-              <Suspense fallback={null}>
-                <Inspector node={inspected} onClose={() => setInspected(null)} />
-              </Suspense>
+                <Suspense fallback={null}>
+                  <Inspector node={inspected} onClose={() => setInspected(null)} />
+                </Suspense>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,11 +2,13 @@ import type { MdFile } from "../markdown/markdown-utils.ts";
 import { getDocumentKind } from "../markdown/document-utils.ts";
 import { parseHeadings, splitIntoSubtopics } from "../markdown/markdown-utils.ts";
 import { persistence, type FileEntry, type PersistedFile } from "./persistence.ts";
+import { resolveNoteLink, splitNoteReference } from "../markdown/note-links.ts";
 
 export interface ResolvedArtifact {
   file: MdFile;
   workspaceId: string;
   workspaceName: string;
+  fragment?: string;
 }
 
 export interface ArtifactViewerDefinition {
@@ -81,7 +83,7 @@ export async function resolveWorkspaceArtifact(
   currentFolders?: FolderRecord[],
   sourceFile?: MdFile,
 ): Promise<ResolvedArtifact | null> {
-  const clean = decodeReference(reference).trim();
+  const { name: clean, fragment } = splitNoteReference(decodeReference(reference).trim());
   // An entry from `currentFiles` is already complete; any other is read in
   // full now.
   const complete = async (
@@ -90,15 +92,15 @@ export async function resolveWorkspaceArtifact(
     entry: FileEntry,
   ): Promise<ResolvedArtifact | null> => {
     if (workspaceId === currentWorkspaceId && currentFiles)
-      return { file: entry as MdFile, workspaceId, workspaceName };
+      return { file: entry as MdFile, workspaceId, workspaceName, fragment };
     const file = await persistence.getFile(workspaceId, entry.id);
-    return file ? { file: hydrateFile(file), workspaceId, workspaceName } : null;
+    return file ? { file: hydrateFile(file), workspaceId, workspaceName, fragment } : null;
   };
   const stable = /^@([^/]+)\/(.+)$/.exec(clean);
   if (stable) {
     if (stable[1] === currentWorkspaceId && currentFiles) {
       const file = currentFiles.find((item) => item.id === stable[2] && !item.deletedAt);
-      return file ? { file, workspaceId: stable[1], workspaceName: currentWorkspaceName } : null;
+      return file ? { file, workspaceId: stable[1], workspaceName: currentWorkspaceName, fragment } : null;
     }
     const workspace = await persistence.getWorkspaceEntries(stable[1]);
     const entry = workspace?.files.find((item) => item.id === stable[2] && !item.deletedAt);
@@ -112,7 +114,9 @@ export async function resolveWorkspaceArtifact(
       : null;
   const folders = currentFolders ?? current?.folders ?? [];
   const files: FileEntry[] = currentFiles ?? current?.files ?? [];
-  const local = findReferencedFile(clean, files, folders, sourceFile);
+  const note = resolveNoteLink(clean, sourceFile ?? { id: "", folderId: null }, files, folders);
+  if (note.status === "ambiguous") return null;
+  const local = findReferencedFile(clean, files, folders, sourceFile) ?? (note.status === "found" ? note.file : null);
   if (local && currentWorkspaceId) return complete(currentWorkspaceId, currentWorkspaceName, local);
   // A repeated local name needs a path; don't silently pick a file elsewhere.
   if (
@@ -133,11 +137,13 @@ export async function resolveWorkspaceArtifact(
     const isCurrent = summary.id === currentWorkspaceId;
     const workspace = isCurrent ? null : await persistence.getWorkspaceEntries(summary.id);
     if (!isCurrent && !workspace) continue;
+    const ref = qualified.length ? clean.slice(summary.name.length + 1) : clean;
+    const remoteNote = resolveNoteLink(ref, { id: "", folderId: null }, workspace?.files ?? files, workspace ? (workspace.folders ?? []) : folders);
     const entry = findReferencedFile(
       qualified.length ? clean.slice(summary.name.length + 1) : clean,
       workspace?.files ?? files,
       workspace ? (workspace.folders ?? []) : folders,
-    );
+    ) ?? (remoteNote.status === "found" ? remoteNote.file : null);
     if (entry) matches.push({ entry, workspaceId: summary.id, workspaceName: summary.name });
   }
   // Ambiguous names must be qualified; never silently attach another file.

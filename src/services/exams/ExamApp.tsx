@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useBlocker } from "@tanstack/react-router";
+import { enforceStrictExamRules } from "./strict-rules";
 import { createPortal } from "react-dom";
+import { Dropdown } from "@/components/ui/dropdown";
 import { CircleAlert, FileCog } from "lucide-react";
-import { LEGACY_EXAM_WORKSPACE } from "@/lib/workspace/kinds";
+import { LEGACY_EXAM_WORKSPACE } from "./legacy-workspace";
 import * as examStorage from "./storage";
 import { workspaceRecoveryStore } from "./recovery";
 import { readExamFile } from "./exam-setup";
@@ -62,6 +65,24 @@ interface TextFile {
   name: string;
   content: string;
 }
+function strictAttempt(attempt: AttemptRecord): AttemptRecord {
+  if (!["instructions", "in_progress"].includes(attempt.session.phase)) return attempt;
+  return {
+    ...attempt,
+    session:
+      attempt.session.pausedAt !== undefined
+        ? unpauseSession(attempt.session, {
+            ...attempt.exam.exam.rules,
+            timing: { ...attempt.exam.exam.rules.timing, pausable: true },
+          })
+        : attempt.session,
+    exam: {
+      ...attempt.exam,
+      exam: { ...attempt.exam.exam, rules: enforceStrictExamRules(attempt.exam.exam.rules) },
+    },
+  };
+}
+
 /**
  * Sitting one `.xam` file, inside the reader. The reader shows this in the
  * paper's place; a timed exam, its result or its review takes over the
@@ -77,6 +98,7 @@ export default function ExamApp({
   onOpenRules,
   onUseRules,
   onCreateRules,
+  onCreateGateRules,
 }: {
   workspaceId: string;
   paper: TextFile;
@@ -91,6 +113,8 @@ export default function ExamApp({
   onUseRules: (rulesName: string) => void;
   /** Make a ruleset with the default rules and name it in the paper. */
   onCreateRules: () => void;
+  /** Apply GATE controls to this paper before its first attempt. */
+  onCreateGateRules: () => void;
 }) {
   const scope = workspaceId === LEGACY_EXAM_WORKSPACE ? undefined : workspaceId;
   const journal = useMemo(() => workspaceRecoveryStore(scope), [scope]);
@@ -135,6 +159,14 @@ export default function ExamApp({
     saveQueue = useRef(Promise.resolve()),
     imagesRef = useRef(images),
     hasLock = useRef(false);
+  useBlocker({
+    enableBeforeUnload: false,
+    shouldBlockFn: () => {
+      if (currentRef.current?.session.phase !== "in_progress") return false;
+      setError("Submit the exam before leaving this page. The timer is still running.");
+      return true;
+    },
+  });
   imagesRef.current = images;
   const display = useCallback((record: AttemptRecord | null) => {
     currentRef.current = record;
@@ -218,7 +250,7 @@ export default function ExamApp({
         plansRef.current = savedPlans;
         setPlans(savedPlans);
         // An unfinished attempt on this paper resumes when the paper opens.
-        const active = history
+        let active = history
           .filter(
             (a) =>
               a.study?.planId === planId &&
@@ -226,6 +258,7 @@ export default function ExamApp({
           )
           .sort((a, b) => b.session.createdAt - a.session.createdAt)[0];
         if (active) {
+          active = strictAttempt(active);
           let session = resumeSession(
             active.session,
             active.exam.exam.rules,
@@ -333,12 +366,24 @@ export default function ExamApp({
       });
   }, [current, persist, retry]);
   useEffect(() => {
+    let lastIncident: { type: string; at: number } | null = null;
     function integrity(type: "tab_hidden" | "tab_visible" | "fullscreen_exit") {
       const record = currentRef.current;
-      if (record?.session.phase === "in_progress")
-        update((s, a) => recordIntegrity(s, a.exam.exam.rules, type));
+      if (record?.session.phase !== "in_progress") return;
+      if (type === "tab_visible") lastIncident = null;
+      else {
+        // A single window exit may fire blur, visibility and fullscreen events.
+        if (lastIncident && lastIncident.type !== type && Date.now() - lastIncident.at < 750)
+          return;
+        lastIncident = { type, at: Date.now() };
+      }
+      update((s, a) => recordIntegrity(s, a.exam.exam.rules, type));
     }
     const visibility = () => integrity(document.hidden ? "tab_hidden" : "tab_visible");
+    const blur = () => integrity("tab_hidden");
+    const focus = () => {
+      if (!document.hidden) integrity("tab_visible");
+    };
     const fullscreen = () => {
       if (!document.fullscreenElement) integrity("fullscreen_exit");
     };
@@ -358,6 +403,8 @@ export default function ExamApp({
     };
     document.addEventListener("visibilitychange", visibility);
     document.addEventListener("fullscreenchange", fullscreen);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", focus);
     window.addEventListener("pagehide", pagehide);
     window.addEventListener("beforeunload", beforeunload);
     ["copy", "cut", "paste", "contextmenu"].forEach((type) =>
@@ -366,6 +413,8 @@ export default function ExamApp({
     return () => {
       document.removeEventListener("visibilitychange", visibility);
       document.removeEventListener("fullscreenchange", fullscreen);
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", focus);
       window.removeEventListener("pagehide", pagehide);
       window.removeEventListener("beforeunload", beforeunload);
       ["copy", "cut", "paste", "contextmenu"].forEach((type) =>
@@ -378,6 +427,7 @@ export default function ExamApp({
   const rulesFile = rules.kind === "found" ? rules.file : null;
   useEffect(() => {
     if (!ready || !rulesFile) return;
+    setSync(null);
     let alive = true;
     syncPaperPlan(
       plansRef.current.find((p) => p.id === planId),
@@ -428,8 +478,13 @@ export default function ExamApp({
           attemptsRef.current.filter((a) => !a.study).map((a) => a.session),
         );
       }
-      if (record.exam.exam.rules.integrity.requireFullscreen && !document.fullscreenElement)
+      if (record.exam.exam.rules.integrity.requireFullscreen && !document.fullscreenElement) {
+        if (!document.fullscreenEnabled)
+          throw new Error(
+            "This exam requires fullscreen. Open it in a browser that supports fullscreen exams.",
+          );
         await document.documentElement.requestFullscreen();
+      }
       await persist({
         ...record,
         session: startSession(
@@ -474,7 +529,8 @@ export default function ExamApp({
       });
     return operation;
   }
-  function openAttempt(attempt: AttemptRecord) {
+  function openAttempt(source: AttemptRecord) {
+    const attempt = strictAttempt(source);
     solutionsRef.current = [];
     setSolutions([]);
     setError("");
@@ -639,14 +695,6 @@ export default function ExamApp({
   else
     panel = (
       <>
-        <p className="ex-meta tabular xf-facts">
-          {paperRecord?.setup &&
-            setupFacts(paperRecord.setup).map((fact) => <span key={fact}>{fact}</span>)}
-          <span>
-            Rules:{" "}
-            <LinkButton onClick={() => onOpenRules(rules.file.id)}>{rules.file.name}</LinkButton>
-          </span>
-        </p>
         {sync.kind === "pinned" && (
           <p className="ex-small xf-pinned" role="note">
             Edited since your first attempt. Scores and attempt limits keep the version you started
@@ -661,6 +709,33 @@ export default function ExamApp({
           onOpenAttempt={openAttempt}
           onReview={reviewAttempt}
         />
+        <details className="xf-entry-details">
+          <summary>Exam details &amp; rules</summary>
+          <div className="ex-stack" style={{ gap: 12, paddingTop: 16 }}>
+            <p className="ex-meta tabular xf-facts">
+              {paperRecord?.setup &&
+                setupFacts(paperRecord.setup).map((fact) => <span key={fact}>{fact}</span>)}
+              <span>
+                Rules:{" "}
+                <LinkButton onClick={() => onOpenRules(rules.file.id)}>
+                  {rules.file.name}
+                </LinkButton>
+              </span>
+            </p>
+            {paperRecord?.setup?.rootRules?.ui.profile !== "gate" &&
+              !attempts.some((a) => a.study?.planId === planId) && (
+                <div className="ex-surface xp-step-panel">
+                  <div className="ex-row">
+                    <Button onClick={onCreateGateRules}>Use GATE style</Button>
+                    <p className="ex-small">
+                      Timer, question palette, Save & next, review flags, numeric keypad and
+                      scientific calculator. MCQs use one-third negative marking.
+                    </p>
+                  </div>
+                </div>
+              )}
+          </div>
+        </details>
       </>
     );
 
@@ -890,18 +965,16 @@ function RulesPicker({
     );
   return (
     <>
-      <select
-        className="ex-select"
+      <Dropdown
+        className="w-auto min-w-48 max-w-full"
         aria-label="Ruleset"
         value={value}
-        onChange={(e) => setChosen(e.target.value)}
-      >
-        {rulesets.map((r) => (
-          <option key={r.name} value={r.name}>
-            {r.title === r.name.replace(/\.xrule$/i, "") ? r.name : `${r.title} (${r.name})`}
-          </option>
-        ))}
-      </select>
+        onValueChange={setChosen}
+        options={rulesets.map((r) => ({
+          value: r.name,
+          label: r.title === r.name.replace(/\.xrule$/i, "") ? r.name : `${r.title} (${r.name})`,
+        }))}
+      />
       <Button variant="primary" onClick={() => onUse(value)}>
         Use these rules
       </Button>

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { enforceStrictExamRules } from "../src/services/exams/strict-rules.ts";
 import { exam, rules, paper, key } from "./exam-format.test.ts";
 import { importExam, importSolutions } from "../src/services/exams/validation.ts";
 import { scoreQuestion } from "../src/services/exams/scoring.ts";
@@ -157,4 +158,26 @@ test("interrupted focus is bounded by last persisted observation", () => {
   s = recordIntegrity(s, e.rules, "tab_visible", 50000);
   s = submitSession(s, 60000);
   assert.equal(focusedSeconds(s).q1, 20);
+});
+
+test("strict exams require fullscreen, cannot pause, and submit after two warnings", () => {
+  const e = exam();
+  e.rules = enforceStrictExamRules(e.rules);
+  const instructions = showInstructions(createSession(e.rules, e.paper, e.taxonomy.id, 0));
+  assert.throws(() => startSession(instructions, e.rules, true, false, 0), /fullscreen/i);
+  let s = start(e);
+  const deadline = s.deadlineAt;
+  assert.throws(() => pauseSession(s, e.rules, 1000), /disabled/);
+  s = recordIntegrity(s, e.rules, "tab_hidden", 1000);
+  s = recordIntegrity(s, e.rules, "tab_hidden", 1100);
+  assert.equal(s.violations, 1);
+  assert.equal(s.phase, "in_progress");
+  s = recordIntegrity(s, e.rules, "tab_visible", 2000);
+  s = recordIntegrity(s, e.rules, "fullscreen_exit", 3000);
+  assert.equal(s.violations, 2);
+  assert.equal(s.phase, "in_progress");
+  assert.equal(s.deadlineAt, deadline);
+  s = recordIntegrity(s, e.rules, "tab_hidden", 4000);
+  assert.equal(s.phase, "submitting");
+  assert.equal(s.events.at(-1)?.reason, "integrity");
 });

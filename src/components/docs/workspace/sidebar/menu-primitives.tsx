@@ -27,6 +27,7 @@ export function MenuItem({
   disabled,
   trailing,
   iconClassName,
+  onIntent,
 }: {
   icon: LucideIcon;
   label: string;
@@ -36,10 +37,13 @@ export function MenuItem({
   /** Rendered at the end of the row — a chevron for a submenu, say. */
   trailing?: React.ReactNode;
   iconClassName?: string;
+  onIntent?: () => void;
 }) {
   return (
     <button
       onClick={onClick}
+      onPointerEnter={onIntent}
+      onFocus={onIntent}
       disabled={disabled}
       className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors disabled:opacity-40 disabled:hover:bg-transparent ${
         destructive ? "text-destructive hover:bg-destructive/10" : "text-foreground hover:bg-accent"

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
@@ -8,6 +8,75 @@ const moduleScript = (path: string, name: string) => {
   }).outputText;
   return `{ const exports = {}; ${js}; window.${name} = exports; }`;
 };
+
+/**
+ * A document's Markdown as IndexedDB holds it right now. Highlights live in
+ * the file itself, as ```<colour>note fences, so this is where they persist.
+ */
+function storedContent(page: Page, name: string) {
+  return page.evaluate(
+    (fileName) =>
+      new Promise<string | null>((resolve, reject) => {
+        const open = indexedDB.open("localdox");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const all = db.transaction("files").objectStore("files").getAll();
+          all.onerror = () => reject(all.error);
+          all.onsuccess = () => {
+            db.close();
+            const rows = all.result as Array<{ name: string; content: string }>;
+            resolve(rows.find((row) => row.name === fileName)?.content ?? null);
+          };
+        };
+      }),
+    name,
+  );
+}
+
+async function openMarkdown(page: Page, name: string, source: string) {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "localdox:prefs",
+      JSON.stringify({ name: "Reader", namePrompted: true, aiEnabled: false }),
+    ),
+  );
+  await page.goto("/");
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({ name, mimeType: "text/markdown", buffer: Buffer.from(source) });
+}
+
+/** Select `phrase` inside the paragraph that starts with `prefix`, as a reader would. */
+async function selectInParagraph(page: Page, prefix: string, phrase: string) {
+  await page.locator("article").evaluate(
+    (article, [start, needle]) => {
+      const paragraph = [...article.querySelectorAll("p")].find((p) =>
+        p.textContent?.startsWith(start),
+      );
+      if (!paragraph) throw new Error(`no paragraph starts with “${start}”`);
+      const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+      for (
+        let node = walker.nextNode() as Text | null;
+        node;
+        node = walker.nextNode() as Text | null
+      ) {
+        const at = node.data.indexOf(needle);
+        if (at < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, at);
+        range.setEnd(node, at + needle.length);
+        getSelection()!.removeAllRanges();
+        getSelection()!.addRange(range);
+        paragraph.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        return;
+      }
+      throw new Error(`“${needle}” not found in “${start}”`);
+    },
+    [prefix, phrase] as const,
+  );
+}
 
 test("ranges survive synchronous edits, preserve Unicode offsets and resolve late repeated quotes", async ({
   page,
@@ -120,7 +189,7 @@ test("application search preserves the article DOM and saved highlights repaint 
   // Measured before the dropdown opens: an open Radix menu hides the rest of
   // the page from the accessibility tree.
   const highlightLayer = await page
-    .getByRole("button", { name: "Highlight #fde047", exact: true })
+    .getByRole("button", { name: "Highlight yellow", exact: true })
     .evaluate((button) => Number(getComputedStyle(button.closest(".fixed")!).zIndex));
   await page.getByRole("button", { name: "More highlight actions" }).click();
   const actionsLayer = await page
@@ -128,10 +197,16 @@ test("application search preserves the article DOM and saved highlights repaint 
     .evaluate((menu) => Number(getComputedStyle(menu).zIndex));
   expect(actionsLayer).toBeGreaterThan(highlightLayer);
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Highlight #fde047", exact: true }).click();
+  await page.getByRole("button", { name: "Highlight yellow", exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (CSS as any).highlights.get("dc-hl-0")?.size ?? 0))
     .toBe(1);
+  // The highlight is a fence in the document itself, right after its paragraph.
+  const original =
+    "# Highlight checks\n\nİ alpha **bravo** charlie target passage.\n\nSecond target paragraph.";
+  const marked = (color: string) =>
+    original.replace("passage.\n\n", `passage.\n\n\`\`\`${color}note\ntarget\n\`\`\`\n\n`);
+  await expect.poll(() => storedContent(page, "highlights.md")).toBe(marked("yellow"));
   await paragraph.evaluate((el) => {
     el.innerHTML = "İ alpha <strong>bravo</strong> charlie target passage.";
   });
@@ -166,15 +241,163 @@ test("application search preserves the article DOM and saved highlights repaint 
     await expect(page.getByRole("button", { name: "Remove highlight" })).toBeVisible();
   };
   await clickHighlight("dc-hl-0");
-  await page.getByRole("button", { name: "Highlight #86efac", exact: true }).click();
+  await page.getByRole("button", { name: "Highlight green", exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => (CSS as any).highlights.get("dc-hl-1")?.size ?? 0))
     .toBe(1);
+  // Recolouring rewrites the fence's info word, in place.
+  await expect.poll(() => storedContent(page, "highlights.md")).toBe(marked("green"));
   await clickHighlight("dc-hl-1");
+  await expect(page.getByRole("button", { name: "Highlight green", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByRole("button", { name: "Remove highlight" }).click();
   await expect
     .poll(() => page.evaluate(() => (CSS as any).highlights.get("dc-hl-1")?.size ?? 0))
     .toBe(0);
+  // Removing it leaves the document exactly as it was before.
+  await expect.poll(() => storedContent(page, "highlights.md")).toBe(original);
+  expect(errors).toEqual([]);
+});
+
+test("math highlights keep the complete quote and survive reopening", async ({ page }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "localdox:prefs",
+      JSON.stringify({ name: "Reader", namePrompted: true, aiEnabled: false }),
+    ),
+  );
+  await page.goto("/");
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({
+      name: "math-highlights.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from(
+        "# Math highlights\n\nInline $a = b$ alone.\n\nBefore $E = mc^2$ after.\n\n$$\n\\frac{a+b}{c} = x^2\n$$\n",
+      ),
+    });
+  await expect(page.locator("article .katex")).toHaveCount(3);
+  const expected: string[] = [];
+  for (const [selector, label] of [
+    ["article .docs-math-inline", ""],
+    ['article p[data-src]:has-text("Before")', "Passage"],
+    ["article .docs-math-rendered", "Equation"],
+  ]) {
+    const quote = await page
+      .locator(selector)
+      .first()
+      .evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const sel = getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+        const quote = range.toString();
+        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        return quote;
+      });
+    // A display equation is painted as one block, without its (aria-hidden)
+    // number.
+    expected.push(quote);
+    if (label) {
+      await page.getByPlaceholder("Add a label...").fill(label);
+      await page.getByPlaceholder("Add a label...").press("Enter");
+    } else {
+      await page.getByRole("button", { name: "Highlight yellow", exact: true }).click();
+    }
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          [...((CSS as any).highlights.get("dc-hl-0") ?? [])].map((r: Range) => r.toString()),
+        ),
+      )
+      .toEqual(expected);
+  }
+  // Each one is a fence holding the passage's own source, LaTeX included.
+  await expect
+    .poll(() => storedContent(page, "math-highlights.md"))
+    .toMatch(/```yellownote Equation\n/);
+  const content = await storedContent(page, "math-highlights.md");
+  expect(content).toContain("```yellownote\n$a = b$\n```");
+  expect(content).toContain("```yellownote Passage\nBefore $E = mc^2$ after.\n```");
+  expect(content).toMatch(/```yellownote Equation\n[^`]*\\frac\{a\+b\}\{c\} = x\^2[^`]*\n```/);
+  await page.reload();
+  await expect(page.locator("article .katex")).toHaveCount(3);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        [...((CSS as any).highlights.get("dc-hl-0") ?? [])].map((r: Range) => r.toString()),
+      ),
+    )
+    .toEqual(expected);
+});
+
+test("a highlight is a fence after its paragraph: painted, kept across reloads and edits, never lost", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const source = [
+    "# Field notes",
+    "",
+    "The tide comes in twice a day.",
+    "",
+    "At the pier the water turns slowly at noon.",
+    "",
+    "Closing line.",
+  ].join("\n");
+  await openMarkdown(page, "field.md", source);
+  await expect(page.getByRole("heading", { name: "Field notes", level: 1 })).toBeVisible();
+
+  await selectInParagraph(page, "At the pier", "turns slowly");
+  await page.getByRole("button", { name: "Highlight yellow", exact: true }).click();
+  const highlighted = source.replace(
+    "at noon.\n\n",
+    "at noon.\n\n```yellownote\nturns slowly\n```\n\n",
+  );
+  await expect.poll(() => storedContent(page, "field.md")).toBe(highlighted);
+  // Painted on its passage; the fence itself is not shown.
+  const paintedIn = () =>
+    page.evaluate(() =>
+      [...((CSS as any).highlights.get("dc-hl-0") ?? [])].map((r: Range) => ({
+        text: r.toString(),
+        paragraph: r.startContainer.parentElement?.closest("p")?.textContent,
+      })),
+    );
+  const onPier = [
+    { text: "turns slowly", paragraph: "At the pier the water turns slowly at noon." },
+  ];
+  await expect.poll(paintedIn).toEqual(onPier);
+  await expect(page.locator("article")).not.toContainText("yellownote");
+  await expect(page.getByRole("note")).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Field notes", level: 1 })).toBeVisible();
+  await expect.poll(paintedIn).toEqual(onPier);
+
+  // Text added above moves the fence with its passage: nothing to re-anchor.
+  const edit = async (next: string) => {
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await page.locator("#markdown-source").fill(next);
+    await page.getByRole("button", { name: /Done/ }).click();
+    await expect(page.getByRole("heading", { name: "Field notes", level: 1 })).toBeVisible();
+    await expect.poll(() => storedContent(page, "field.md")).toBe(next);
+  };
+  await edit(
+    highlighted.replace("# Field notes\n\n", "# Field notes\n\nA new opening paragraph.\n\n"),
+  );
+  await expect(page.getByText("A new opening paragraph.")).toBeVisible();
+  await expect.poll(paintedIn).toEqual(onPier);
+
+  // Edit the passage away: the highlight shows as a card where it was.
+  await edit(highlighted.replace("the water turns slowly at noon", "the water drifts at noon"));
+  const orphan = page.getByRole("note", { name: "Highlight · passage not found" });
+  await expect(orphan).toBeVisible();
+  await expect(orphan).toContainText("turns slowly");
+  await expect.poll(paintedIn).toEqual([]);
   expect(errors).toEqual([]);
 });
 

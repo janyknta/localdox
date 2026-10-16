@@ -85,21 +85,25 @@ test("recovery journals cannot replay a same-ID plan from another workspace", ()
   assert.equal(recoverPending([], [plan], store).tokens.length, 0);
 });
 
-test("workspace kinds survive persistence and backups, and old backups default to reader", async () => {
+test("workspaces have no type, and legacy backup types are ignored", async () => {
   const { newWorkspaceRecord, persistence, parseWorkspaceImport, serializeWorkspace } =
     await import("../src/lib/workspace/persistence.ts");
-  const workspace = newWorkspaceRecord("GATE preparation", "exam");
+  const workspace = newWorkspaceRecord("GATE preparation");
   await persistence.putWorkspace(workspace);
-  assert.equal((await persistence.getWorkspace(workspace.id))?.kind, "exam");
+  assert.equal("kind" in (await persistence.getWorkspace(workspace.id))!, false);
   assert.equal(
-    (await persistence.listWorkspaceSummaries()).find((w) => w.id === workspace.id)?.kind,
-    "exam",
+    "kind" in (await persistence.listWorkspaceSummaries()).find((w) => w.id === workspace.id)!,
+    false,
   );
   const backup = await serializeWorkspace(workspace);
-  assert.equal(parseWorkspaceImport(backup).kind, "exam");
+  assert.equal("kind" in JSON.parse(backup).workspace, false);
+  assert.equal("kind" in parseWorkspaceImport(backup), false);
   const legacy = JSON.parse(backup);
-  delete legacy.workspace.kind;
-  assert.equal(parseWorkspaceImport(JSON.stringify(legacy)).kind, "reader");
-  legacy.workspace.kind = "unsupported";
-  assert.throws(() => parseWorkspaceImport(JSON.stringify(legacy)));
+  for (const kind of ["exam", "reader", "documentation", "unsupported"]) {
+    legacy.workspace.kind = kind;
+    const imported = parseWorkspaceImport(JSON.stringify(legacy));
+    assert.equal("kind" in imported, false);
+    assert.equal(imported.id, workspace.id);
+    assert.equal(imported.name, workspace.name);
+  }
 });

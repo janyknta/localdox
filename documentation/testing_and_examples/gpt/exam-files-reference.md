@@ -1,6 +1,6 @@
 # Localdox exam and practice files: the contract
 
-Localdox runs exams and practice from three plain files that live in an **Exam Workspace**, organised in folders like any other files. Every rule below is enforced by the app's parsers; a file that breaks one is refused with a message naming the file and line. Follow it exactly.
+Localdox runs exams and practice from three plain files that live in an **workspace**, organised in folders like any other files. Every rule below is enforced by the app's parsers; a file that breaks one is refused with a message naming the file and line. Follow it exactly.
 
 | File | Format | Holds |
 | :-- | :-- | :-- |
@@ -327,11 +327,11 @@ There are two ways into Localdox. Choose by size.
 
 ### 8.1 Loose files (one exam, one practice set, a few files)
 
-Deliver the files themselves. The learner opens an **Exam Workspace** (Settings ▸ Workspace ▸ New, kind Exam), then **+ ▸ Upload files** and selects all of them at once (or drops them on the window). Alternatively **+ ▸ File**, a name ending `.xam`/`.xrule`/`.xp`, then paste the content over the template. Zips are **not** unpacked; never deliver a zip.
+Deliver the files themselves. The learner opens an **workspace** (Settings ▸ Workspace ▸ New), then **+ ▸ Upload files** and selects all of them at once (or drops them on the window). Alternatively **+ ▸ File**, a name ending `.xam`/`.xrule`/`.xp`, then paste the content over the template. Zips are **not** unpacked; never deliver a zip.
 
 ### 8.2 A workspace backup (a study plan, a course, many papers, folders)
 
-Deliver one `<name>.json` that Localdox imports as a **new Exam Workspace with its folders**: Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**. Build it with `localdox_check.py` (`build_workspace`) rather than by hand:
+Deliver one `<name>.json` that Localdox imports as a **new workspace with its folders**: Settings ▸ Workspace ▸ Transfer ▸ **Import workspace**. Build it with `localdox_check.py` (`build_workspace`) rather than by hand:
 
 ```json
 {

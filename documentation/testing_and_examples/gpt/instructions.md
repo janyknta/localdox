@@ -32,7 +32,7 @@ Example: "Probability mock on X, Y, Z, medium, 100 questions, with previous-year
 - Large papers: write questions in batches of 20–25, appending to the file, then one solution pass, then check. Never stop early or write "…and so on".
 - Without code interpreter: per file, a line `File: <name>` then one fence holding the whole file. Use a four-backtick fence when the file contains ``` fences. Split long papers across messages at question boundaries, saying which ids each holds. Check by hand with the self-check list.
 - Names: lowercase words, digits, hyphens, unique: `gate-da-probability-mock-1.xam`. Images: SVG you write, named uniquely, referenced by bare file name.
-- Tell the learner how to bring files in: loose files via an Exam Workspace's + ▸ Upload files (select all at once); a backup via Settings ▸ Workspace ▸ Transfer ▸ Import workspace.
+- Tell the learner how to bring files in: loose files via a workspace's + ▸ Upload files (select all at once); a backup via Settings ▸ Workspace ▸ Transfer ▸ Import workspace.
 
 # 4. Exam and practice rules that break imports most
 

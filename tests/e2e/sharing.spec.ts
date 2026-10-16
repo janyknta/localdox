@@ -6,8 +6,12 @@ import { test, expect, type Page } from "@playwright/test";
 // intercepted here, so no test ever uploads anything.
 
 const BINNED_SECRET = "BINNED SALARY TEXT";
-const PRIVATE_NOTE = "PRIVATE STAR NOTE";
-const PRIVATE_HIGHLIGHT = "PRIVATE HIGHLIGHT NOTE";
+const PRIVATE_STAR = "PRIVATE STAR NOTE";
+const PRIVATE_NOTE = "PRIVATE NOTE TEXT";
+const PRIVATE_HIGHLIGHT = "PRIVATE HIGHLIGHT LABEL";
+const PUBLIC_TEXT = "# Notes\n\nPublic text.";
+// Notes and highlights are fenced blocks in the document's own Markdown.
+const ANNOTATED = `${PUBLIC_TEXT}\n\n\`\`\`yellownote ${PRIVATE_HIGHLIGHT}\nPublic\n\`\`\`\n\n\`\`\`note\n${PRIVATE_NOTE}\n\`\`\`\n`;
 
 const backup = {
   format: "localdox-workspace",
@@ -25,7 +29,7 @@ const backup = {
       {
         id: "notes",
         name: "notes.md",
-        content: "# Notes\n\nPublic text.",
+        content: ANNOTATED,
         kind: "markdown",
         folderId: "papers",
         addedAt: 1,
@@ -48,12 +52,9 @@ const backup = {
         fileId: "notes",
         kind: "file",
         title: "notes.md",
-        note: PRIVATE_NOTE,
+        note: PRIVATE_STAR,
         createdAt: 5,
       },
-    ],
-    highlights: [
-      { id: "h1", fileId: "notes", text: "Public", color: "yellow", label: PRIVATE_HIGHLIGHT },
     ],
     ui: { activeFileId: "notes", expanded: {}, sidebarCollapsed: false, scrollTop: 0 },
   },
@@ -148,9 +149,10 @@ test("workspace share previews the payload and leaves out the Bin and annotation
   await expect(dialog.getByRole("checkbox", { name: /notes\.md/ })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: /draft\.md/ })).toBeChecked();
   await expect(dialog.getByRole("checkbox", { name: /salary\.md.*In Bin/ })).not.toBeChecked();
-  await expect(
-    dialog.getByRole("checkbox", { name: /stars, notes and highlights/ }),
-  ).not.toBeChecked();
+  const annotations = dialog.getByRole("checkbox", { name: /notes and highlights/ });
+  await expect(annotations).not.toBeChecked();
+  // Counted from the fences in the selected files.
+  await expect(dialog).toContainText("2 on the selected files");
   expect(bytebin.uploads).toHaveLength(0);
 
   await dialog.getByRole("button", { name: "Upload and copy link" }).click();
@@ -163,13 +165,23 @@ test("workspace share previews the payload and leaves out the Bin and annotation
 
   expect(bytebin.uploads).toHaveLength(1);
   const body = bytebin.uploads[0];
-  for (const secret of [BINNED_SECRET, PRIVATE_NOTE, PRIVATE_HIGHLIGHT, "Secret plans"])
+  for (const secret of [
+    BINNED_SECRET,
+    PRIVATE_STAR,
+    PRIVATE_NOTE,
+    PRIVATE_HIGHLIGHT,
+    "Secret plans",
+  ])
     expect(body).not.toContain(secret);
+  expect(body).not.toContain("```");
   const shared = JSON.parse(body).workspace;
   expect(shared.files.map((f: { name: string }) => f.name)).toEqual(["notes.md", "draft.md"]);
+  // The fences are taken out of the shared text; the document itself stays.
+  expect(shared.files[0].content).toBe(`${PUBLIC_TEXT}\n`);
   expect(shared.folders.map((f: { name: string }) => f.name)).toEqual(["Papers"]);
   expect(shared.saved).toEqual([]);
-  expect(shared.highlights).toEqual([]);
+  expect(shared).not.toHaveProperty("highlights");
+  expect(shared).not.toHaveProperty("notes");
 });
 
 test("annotations and binned files travel only when ticked", async ({ page }) => {
@@ -177,15 +189,17 @@ test("annotations and binned files travel only when ticked", async ({ page }) =>
   const dialog = await openWorkspaceShare(page);
   await dialog.getByRole("checkbox", { name: /draft\.md/ }).uncheck();
   await dialog.getByRole("checkbox", { name: /salary\.md/ }).check();
-  await dialog.getByRole("checkbox", { name: /stars, notes and highlights/ }).check();
+  await dialog.getByRole("checkbox", { name: /notes and highlights/ }).check();
   await dialog.getByRole("button", { name: "Upload and copy link" }).click();
   await expect(dialog.getByRole("textbox", { name: "Share link" })).toBeVisible();
 
   const shared = JSON.parse(bytebin.uploads[0]).workspace;
   expect(shared.files.map((f: { name: string }) => f.name)).toEqual(["notes.md", "salary.md"]);
   expect(shared.files.every((f: { deletedAt?: number }) => f.deletedAt == null)).toBe(true);
-  expect(shared.saved.map((s: { note: string }) => s.note)).toEqual([PRIVATE_NOTE]);
-  expect(shared.highlights.map((h: { label: string }) => h.label)).toEqual([PRIVATE_HIGHLIGHT]);
+  // Ticked, the document travels with its fences exactly as written.
+  expect(shared.files[0].content).toBe(ANNOTATED);
+  // Stars never travel: starring is no longer part of the app.
+  expect(shared.saved).toEqual([]);
 });
 
 test("cancel and download never upload; a failed upload stays visible", async ({ page }) => {
@@ -218,7 +232,14 @@ test("sharing one file from the sidebar previews it and sends only that file", a
   await page.goto("/#share=fixturekey");
   await expect(page.getByRole("heading", { name: "Notes", level: 1 })).toBeVisible();
 
-  await page.getByRole("button", { name: /^notes/ }).hover();
+  // notes.md sits in the "Papers" folder, which may start collapsed.
+  const row = page.getByRole("navigation").getByRole("button", { name: /^notes/ });
+  if (!(await row.isVisible()))
+    await page
+      .getByRole("navigation")
+      .getByRole("button", { name: /^Papers/ })
+      .click();
+  await row.hover();
   await page
     .getByRole("navigation")
     .getByRole("button", { name: "Options", exact: true })
@@ -241,5 +262,8 @@ test("sharing one file from the sidebar previews it and sends only that file", a
   const payload = JSON.parse(bytebin.uploads[0]);
   expect(payload.format).toBe("localdox-files");
   expect(payload.files.map((f: { name: string }) => f.name)).toEqual(["notes.md"]);
-  expect(bytebin.uploads[0]).not.toContain(PRIVATE_NOTE);
+  // A single file has no opt-in: its notes and highlights are left out.
+  expect(payload.files[0].content).toBe(`${PUBLIC_TEXT}\n`);
+  for (const secret of [PRIVATE_STAR, PRIVATE_NOTE, PRIVATE_HIGHLIGHT])
+    expect(bytebin.uploads[0]).not.toContain(secret);
 });

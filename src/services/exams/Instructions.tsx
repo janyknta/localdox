@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { ArrowLeft, Maximize } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type { ExamRecord } from "./storage";
 import { ExamMarkdown } from "./ExamMarkdown";
-import { Button, Chip, Dialog, DialogClose, Segmented, StatBlocks } from "./ui/kit";
+import { Button, Chip, Segmented, StatBlocks } from "./ui/kit";
 import { ExamAssets } from "./ExamMarkdown";
 import { Glyph, type Status } from "./ui/Palette";
 import {
@@ -214,13 +214,9 @@ export function InstructionsScreen({
   const r = record.exam.rules,
     paper = record.exam.paper,
     scaled = sampleScale(r, paper),
-    [fullscreenStep, setFullscreenStep] = useState(false),
     [timing, setTiming] = useState<"scaled" | "full">("scaled");
   const scale = scaled < 1 && timing === "scaled" ? scaled : 1;
-  const begin = () => {
-    if (r.integrity.requireFullscreen && !document.fullscreenElement) setFullscreenStep(true);
-    else onStart(scale);
-  };
+  const begin = () => onStart(scale);
   return (
     <div className="xi">
       <div className="xi-top">
@@ -288,33 +284,17 @@ export function InstructionsScreen({
               Start exam
             </Button>
             <span id="xi-reason" className="xi-reason">
-              {!ack ? "Tick the box to start." : busy ? "Starting…" : ""}
+              {!ack
+                ? "Tick the box to start."
+                : busy
+                  ? "Starting…"
+                  : r.integrity.requireFullscreen
+                    ? "Opens in fullscreen."
+                    : ""}
             </span>
           </div>
         </div>
       </div>
-      <Dialog
-        open={fullscreenStep}
-        onOpenChange={setFullscreenStep}
-        title="Enter fullscreen to start"
-        description="This exam runs in fullscreen. Leaving fullscreen or switching tabs counts as a warning."
-        footer={
-          <>
-            <DialogClose asChild>
-              <Button>Cancel</Button>
-            </DialogClose>
-            <Button
-              variant="primary"
-              onClick={() => {
-                setFullscreenStep(false);
-                onStart(scale);
-              }}
-            >
-              <Maximize size={16} aria-hidden="true" /> Enter fullscreen & start
-            </Button>
-          </>
-        }
-      />
     </div>
   );
 }

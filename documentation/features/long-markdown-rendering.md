@@ -133,11 +133,11 @@ scanner's rules makes a test fail.
 While a long document is mounting, its content element has `aria-busy`, and
 the viewer isn't _settled_. These wait for it:
 
-| Reader action                            | Why it waits                                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Highlights are painted (and re-anchored) | Anchoring against part of the document can match an earlier repeat of the quote and store that position as a repair |
-| A search hit or saved passage is shown   | Its text may not be mounted yet                                                                                     |
-| A heading is scrolled to                 | Same; kept in `pendingHeading` and scrolled to once settled                                                         |
+| Reader action                          | Why it waits                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Highlights are painted                 | A highlight's passage may not be mounted yet; painting part of the document would leave later marks unpainted |
+| A search hit or saved passage is shown | Its text may not be mounted yet                                                                               |
+| A heading is scrolled to               | Same; kept in `pendingHeading` and scrolled to once settled                                                   |
 
 A section link clicked before its heading exists still lands on it: the
 target is kept until the render completes.
@@ -216,8 +216,8 @@ long tasks of its own at 4× throttling. Wait on id selectors instead.
   example an inline chevron with negative margins), which wasn't done here.
   Hover and scrolling don't pay this cost.
 - The mounted element count isn't bounded; the whole document ends up in the
-  DOM, as before. Windowing would break find, selection, printing and the
-  offset-based highlights. What is bounded is the work per task.
+  DOM, as before. Windowing would break find, selection, printing and
+  highlight painting. What is bounded is the work per task.
 - A document is only split when it is 16,000 characters or longer, has no
   footnotes, and has no link definitions the scanner can't copy line by
   line. Other documents render in one task, as before.

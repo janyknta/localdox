@@ -1,5 +1,6 @@
 import { Section, Group, Row } from "./primitives";
 import { Switch } from "@/components/ui/switch";
+import { Dropdown } from "@/components/ui/dropdown";
 import type { SettingsPageProps } from "../SettingsPage";
 import type { MathRendererType } from "@/services/math";
 
@@ -45,19 +46,14 @@ export function MathSettings(
             <label htmlFor="math-renderer" className="block text-sm font-medium text-foreground">
               Typesetting
             </label>
-            <select
+            <Dropdown
               id="math-renderer"
               value={props.mathRenderer}
-              onChange={(event) => props.onSetMathRenderer(event.target.value as MathRendererType)}
+              onValueChange={(value) => props.onSetMathRenderer(value as MathRendererType)}
               aria-describedby="math-renderer-hint"
-              className="mt-3 min-h-10 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {RENDERERS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              className="mt-3"
+              options={RENDERERS.map((option) => ({ value: option.id, label: option.label }))}
+            />
             <p
               id="math-renderer-hint"
               className="mt-2 text-xs leading-relaxed text-muted-foreground"

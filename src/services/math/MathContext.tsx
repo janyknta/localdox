@@ -48,16 +48,18 @@ export function MathProvider({
   source,
   preferences = DEFAULT_MATH_PREFERENCES,
   navigateToEquation,
+  registry: sharedRegistry,
   children,
 }: {
   source: string;
   preferences?: MathPreferences;
   navigateToEquation?: (label: string) => void;
+  registry?: EquationRegistry;
   children: ReactNode;
 }) {
   const registry = useMemo(
-    () => buildEquationRegistry(source, { numbering: preferences.numberEquations }),
-    [source, preferences.numberEquations],
+    () => sharedRegistry ?? buildEquationRegistry(source, { numbering: preferences.numberEquations }),
+    [source, preferences.numberEquations, sharedRegistry],
   );
 
   const value = useMemo<MathContextValue>(

@@ -176,6 +176,21 @@ export function ExamScreen({
     [calc, setCalc] = useState(false),
     [reference, setReference] = useState<"instructions" | "paper" | null>(null),
     [lowGlare, setLowGlare] = useState(readGlare);
+  const [windowFocused, setWindowFocused] = useState(true);
+  useEffect(() => {
+    const blur = () => setWindowFocused(false);
+    const focus = () => setWindowFocused(true);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", focus);
+    return () => {
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", focus);
+    };
+  }, []);
+  const fullscreenMissing =
+    exam.rules.integrity.requireFullscreen &&
+    typeof document !== "undefined" &&
+    !document.fullscreenElement;
   const r = exam.rules,
     paper = exam.paper,
     profile = uiProfile(r),
@@ -184,7 +199,7 @@ export function ExamScreen({
     remaining = remainingSeconds(session, now),
     index = session.order.indexOf(q.id),
     paused = session.pausedAt !== undefined,
-    locked = paused || remaining === 0;
+    locked = paused || remaining === 0 || fullscreenMissing || !windowFocused;
   const section = r.sections[session.sectionIndex],
     currentSection = r.sections.find((s) => s.id === q.section) ?? section,
     nextId = session.order[index + 1],
@@ -232,8 +247,6 @@ export function ExamScreen({
   };
 
   // ── The one notice slot (fixed height; never pushes the question). ──
-  const fullscreenMissing =
-    r.integrity.requireFullscreen && typeof document !== "undefined" && !document.fullscreenElement;
   const violationEvents = session.events.filter(
     (e) =>
       e.type === "tab_hidden" || (e.type === "fullscreen_exit" && r.integrity.requireFullscreen),
@@ -262,13 +275,18 @@ export function ExamScreen({
               run: () => void document.documentElement.requestFullscreen().catch(() => {}),
             },
           }
-        : session.violations > 0 && now - seenAt < 12_000
-          ? { tone: "warning", text: violationCopy(r, session.violations) }
-          : crossed !== null
-            ? { tone: "warning", text: thresholdCopy(crossed) }
-            : unsaved
-              ? { tone: "info", text: `Not saved. ${profile.labels.saveNext} keeps this answer.` }
-              : null;
+        : !windowFocused
+          ? {
+              tone: "danger",
+              text: "Return to the exam window to continue. The timer is still running.",
+            }
+          : session.violations > 0 && now - seenAt < 12_000
+            ? { tone: "warning", text: violationCopy(r, session.violations) }
+            : crossed !== null
+              ? { tone: "warning", text: thresholdCopy(crossed) }
+              : unsaved
+                ? { tone: "info", text: `Not saved. ${profile.labels.saveNext} keeps this answer.` }
+                : null;
 
   const noticeEl = notice && (
     <span className="xr-notice" data-tone={notice.tone} title={notice.text}>
@@ -327,6 +345,7 @@ export function ExamScreen({
         </span>
       </div>
       <QuestionPalette
+        disabled={locked}
         r={r}
         paper={paper}
         session={session}
@@ -405,6 +424,7 @@ export function ExamScreen({
         </div>
         {r.timing.mode === "per_section" && (
           <Button
+            disabled={locked}
             onClick={() => {
               setSheet(false);
               setSectionConfirm(true);
@@ -453,6 +473,7 @@ export function ExamScreen({
                     className="xr-section"
                     aria-current={i === session.sectionIndex ? "page" : undefined}
                     disabled={
+                      locked ||
                       isLocked ||
                       (r.timing.mode === "per_section" && i !== session.sectionIndex) ||
                       (!r.navigation.free && i !== session.sectionIndex)

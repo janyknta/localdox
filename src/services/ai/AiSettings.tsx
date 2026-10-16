@@ -1,3 +1,4 @@
+import { Dropdown } from "@/components/ui/dropdown";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, ShieldAlert, Trash2, ExternalLink } from "lucide-react";
 import { PROVIDER_LIST, getProvider } from "./registry";
@@ -357,42 +358,31 @@ function DefaultModel({
       <Group>
         <div className="flex items-center justify-between gap-4 px-4 py-3">
           <span className="shrink-0 text-sm text-foreground">Model</span>
-          <select
+          <Dropdown
+            aria-label="Default model"
             value={config.defaultModel}
-            onChange={(e) => {
-              const model = e.target.value;
+            onValueChange={(model) => {
               const provider = allOptions.find((o) => o.model.id === model)?.provider.id as
                 ProviderId | undefined;
               onChange({ defaultModel: model, ...(provider ? { defaultProvider: provider } : {}) });
             }}
-            className="min-w-0 max-w-[60%] rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-2 focus:ring-primary/10 coarse:min-h-11"
-          >
-            {PROVIDER_LIST.map((provider) => {
+            className="max-w-[60%]"
+            options={PROVIDER_LIST.map((provider) => {
               const isConnected = connected.includes(provider.id);
-              return (
-                <optgroup
-                  key={provider.id}
-                  label={`${provider.label}${isConnected ? " — connected" : " — no key"}`}
-                >
-                  {provider.models.map((model) => {
-                    // Only a connected key's own model list can rule a model out.
-                    const unavailable =
-                      isConnected && !usable(provider, availability).includes(model);
-                    return (
-                      <option key={model.id} value={model.id} disabled={unavailable}>
-                        {model.label}
-                        {!isConnected
-                          ? " (add key)"
-                          : unavailable
-                            ? " (not available to your key)"
-                            : ""}
-                      </option>
-                    );
-                  })}
-                </optgroup>
-              );
+              return {
+                label: `${provider.label}${isConnected ? " — connected" : " — no key"}`,
+                options: provider.models.map((model) => {
+                  const unavailable =
+                    isConnected && !usable(provider, availability).includes(model);
+                  return {
+                    value: model.id,
+                    disabled: unavailable,
+                    label: `${model.label}${!isConnected ? " (add key)" : unavailable ? " (not available to your key)" : ""}`,
+                  };
+                }),
+              };
             })}
-          </select>
+          />
         </div>
       </Group>
       {notice && (

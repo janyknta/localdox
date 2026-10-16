@@ -1,4 +1,3 @@
-import { workspaceFeatures, type WorkspaceKind } from "@/lib/workspace/kinds";
 import { useRef, useState } from "react";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { Section, Group, Row, Empty, IconButton } from "./primitives";
@@ -19,11 +18,11 @@ export function WorkspaceSettings({
 }: {
   showEmbedMedia: boolean;
   onSetShowEmbedMedia: (show: boolean) => void;
-  workspaces: { id: string; name: string; kind?: WorkspaceKind }[];
+  workspaces: { id: string; name: string }[];
   currentWorkspaceId: string | null;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
-  onNew: (name: string, kind?: WorkspaceKind) => void;
+  onNew: (name: string) => void;
   onOpenWorkspace: (id: string) => void;
   onImport: (file: File) => void;
   onExport: () => void;
@@ -32,12 +31,11 @@ export function WorkspaceSettings({
   const fileRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [kind, setKind] = useState<WorkspaceKind>("exam");
 
   const commitCreate = () => {
     const name = newName.trim();
     if (!name) return;
-    onNew(name, kind);
+    onNew(name);
     setCreating(false);
     setNewName("");
   };
@@ -80,19 +78,6 @@ export function WorkspaceSettings({
           )}
           {creating && (
             <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
-              <select
-                aria-label="Workspace kind"
-                value={kind}
-                onChange={(e) => setKind(e.target.value as WorkspaceKind)}
-                className="rounded-md border border-border bg-background p-2 text-sm"
-              >
-                {Object.entries(workspaceFeatures).map(([value, feature]) => (
-                  <option key={value} value={value} disabled={!feature.available}>
-                    {feature.label}
-                    {!feature.available ? " (coming later)" : ""}
-                  </option>
-                ))}
-              </select>
               <input
                 autoFocus
                 type="text"
@@ -162,11 +147,7 @@ export function WorkspaceSettings({
           />
           <Row
             label="Export workspace"
-            hint={
-              workspaces.find((w) => w.id === currentWorkspaceId)?.kind === "exam"
-                ? "Download learning materials and reader annotations as .json. Exam papers and attempts are stored separately."
-                : "Download the current workspace as .json"
-            }
+            hint="Download files and annotations as .json. Exam attempts and progress are stored separately."
             control={
               <button
                 onClick={onExport}
@@ -214,7 +195,7 @@ function WorkspaceItemRow({
   onOpen,
   canDelete,
 }: {
-  workspace: { id: string; name: string; kind?: WorkspaceKind };
+  workspace: { id: string; name: string };
   isCurrent: boolean;
   onRename: (id: string, name: string) => void;
   onDelete: (id: string) => void;
@@ -279,7 +260,6 @@ function WorkspaceItemRow({
           {isCurrent && <span className="text-xs text-muted-foreground">Current</span>}
         </span>
       }
-      hint={workspaceFeatures[workspace.kind ?? "reader"].label}
       control={
         <>
           {

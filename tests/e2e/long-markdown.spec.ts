@@ -92,8 +92,8 @@ test("a highlight on a repeated phrase is repainted in its own paragraph after r
 }) => {
   await upload(page, "highlights.md", longDocument());
   await settled(page);
-  // "alpha" appears in every section; only the stored offsets and context
-  // say which one this is.
+  // "alpha" appears in every section; the fence written right after this
+  // paragraph is what says which one this is.
   const paragraph = page.locator("article p").filter({ hasText: "Paragraph 2990:" });
   await paragraph.scrollIntoViewIfNeeded();
   await paragraph.evaluate((el) => {
@@ -106,7 +106,33 @@ test("a highlight on a repeated phrase is repainted in its own paragraph after r
     getSelection()!.addRange(range);
     el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   });
-  await page.getByRole("button", { name: "Highlight #fde047", exact: true }).click();
+  await page.getByRole("button", { name: "Highlight yellow", exact: true }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<boolean>((resolve, reject) => {
+            const open = indexedDB.open("localdox");
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+              const db = open.result;
+              const all = db.transaction("files").objectStore("files").getAll();
+              all.onsuccess = () => {
+                db.close();
+                const row = (all.result as Array<{ name: string; content: string }>).find(
+                  (file) => file.name === "highlights.md",
+                );
+                resolve(
+                  !!row?.content.includes(
+                    "Paragraph 2990: alpha **bravo** charlie target passage 2990.\n\n```yellownote\nalpha\n```\n\n## Section 2991",
+                  ),
+                );
+              };
+            };
+          }),
+      ),
+    )
+    .toBe(true);
 
   const painted = () =>
     page.evaluate(() =>
@@ -120,8 +146,8 @@ test("a highlight on a repeated phrase is repainted in its own paragraph after r
     );
   await expect.poll(painted).toEqual([{ text: "alpha", paragraph: "Paragraph 2990:" }]);
 
-  // On reload the document mounts in steps. Anchoring against the part that
-  // is there would find an earlier "alpha" and store it as a repair.
+  // On reload the document mounts in steps. Painting must wait for the part
+  // that holds the passage, not settle for an earlier "alpha".
   await page.reload();
   await expect(page.getByText("Paragraph 0: alpha")).toBeVisible();
   await settled(page);

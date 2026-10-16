@@ -22,9 +22,8 @@ export function StorageSettings({
   /** The open workspace, counted as this tab holds it (unsaved edits too). */
   workspaceId: string | null;
   files: MdFile[];
-  /** Its notes and rough work, which count toward the same limit. */
+  /** Its rough work, which counts toward the same limit. (Notes are in the documents.) */
   writing?: {
-    notes: readonly { content: string }[];
     scratchpads: readonly { title: string; content: string }[];
   };
   /** How many documents the Bin is holding, for the pressure prompt. */

@@ -109,7 +109,7 @@ test("the interim split-body v3 folds its bodies back into file rows", async (t)
     assert.equal(typeof loaded.files[1].data, "object");
     assert.equal(await portableData(loaded.files[1].data), photo);
     const db = await openRaw();
-    assert.equal(db.version, 4);
+    assert.equal(db.version, 5);
     assert.equal(db.objectStoreNames.contains(SPLIT), false);
     db.close();
     // Totals are measured again, from Blob sizes: 3,000 base64 characters are 2,250 bytes.
@@ -119,7 +119,7 @@ test("the interim split-body v3 folds its bodies back into file rows", async (t)
   await persistence.destroy();
 });
 
-test("a Blob-body v3 opens as v4 unchanged", async () => {
+test("a Blob-body v3 opens without changing its files", async () => {
   const workspace = newWorkspaceRecord("Blob bodies");
   const body = binaryBody(new Blob([new Uint8Array([1, 2, 3])], { type: "application/pdf" }));
   workspace.files = [{ id: "pdf", name: "a.pdf", content: "", data: body }];

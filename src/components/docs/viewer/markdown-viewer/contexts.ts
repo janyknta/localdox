@@ -13,6 +13,8 @@ import type { MediaContext } from "@/lib/markdown/media-context";
 export interface CollapseContextValue {
   isCollapsed: (headingId: string) => boolean;
   toggle: (headingId: string) => void;
+  /** Wrapped mode keeps disclosure controls visible, including on phones. */
+  showControls?: boolean;
 }
 export const CollapseContext = createContext<CollapseContextValue | null>(null);
 
